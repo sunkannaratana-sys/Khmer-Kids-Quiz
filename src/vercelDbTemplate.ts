@@ -37,7 +37,7 @@ export const VERCEL_JSON_CONFIG = `{
 
 export const VERCEL_POSTGRES_SCHEMA_SQL = `-- ============================================================================
 -- KHMER KIDS QUIZ (រៀនអក្សរខ្មែរថ្នាក់ទី១) — VERCEL POSTGRES / NEON DATABASE SCHEMA
--- Compatible with: Vercel Postgres, Neon Serverless Postgres, Supabase
+-- 100% Pure PostgreSQL Syntax (No curly braces "{}" — safe for all SQL Editors)
 -- ============================================================================
 
 -- 1. USERS & RBAC TABLE (គណនីអ្នកប្រើប្រាស់ និងតួនាទី)
@@ -103,7 +103,7 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- ============================================================================
--- SEED INITIAL GRADE 1 KHMER QUESTIONS (UTF-8 KHMER UNICODE)
+-- SEED INITIAL GRADE 1 KHMER QUESTIONS (Using jsonb_build_array & jsonb_build_object)
 -- ============================================================================
 INSERT INTO quiz_questions (
   id, lesson_id, category_label, icon, clue_word_khmer, clue_word_english,
@@ -115,28 +115,44 @@ VALUES
     101, 'lesson-1', 'មេរៀនទី ១ · ព្យញ្ជនៈ ជួរ ក', '🦀', 'ក្តាម', 'Crab (Kdaam)',
     'សំឡេងអាន៖ «ក» (Ka) — ក ក្តាម', 'ក... ក ក្តាម',
     'តើពាក្យ «ក្តាម» ផ្តើមដោយព្យញ្ជនៈមួយណា?', 'Which Khmer consonant starts the word for Crab (ក្តាម)?',
-    '[{"letter":"ក","label":"ក (Ka)","speech":"ក"},{"letter":"ខ","label":"ខ (Kha)","speech":"ខ"},{"letter":"គ","label":"គ (Ko)","speech":"គ"}]'::jsonb,
+    jsonb_build_array(
+      jsonb_build_object('letter', 'ក', 'label', 'ក (Ka)', 'speech', 'ក'),
+      jsonb_build_object('letter', 'ខ', 'label', 'ខ (Kha)', 'speech', 'ខ'),
+      jsonb_build_object('letter', 'គ', 'label', 'គ (Ko)', 'speech', 'គ')
+    ),
     'ក', 'ត្រឹមត្រូវ! «ក» គឺ ក ក្តាម (Ka for Crab)!'
   ),
   (
     201, 'lesson-2', 'មេរៀនទី ២ · ព្យញ្ជនៈ ជួរ ច-ស', '🍌', 'ចេក', 'Banana (Chek)',
     'សំឡេងអាន៖ «ច» (Cha) — ច ចេក', 'ច... ច ចេក',
     'តើពាក្យ «ចេក» ផ្តើមដោយព្យញ្ជនៈមួយណា?', 'Which Khmer consonant starts the word for Banana (ចេក)?',
-    '[{"letter":"ឆ","label":"ឆ (Chha)","speech":"ឆ"},{"letter":"ជ","label":"ជ (Cho)","speech":"ជ"},{"letter":"ច","label":"ច (Cha)","speech":"ច"}]'::jsonb,
+    jsonb_build_array(
+      jsonb_build_object('letter', 'ឆ', 'label', 'ឆ (Chha)', 'speech', 'ឆ'),
+      jsonb_build_object('letter', 'ជ', 'label', 'ជ (Cho)', 'speech', 'ជ'),
+      jsonb_build_object('letter', 'ច', 'label', 'ច (Cha)', 'speech', 'ច')
+    ),
     'ច', 'ត្រឹមត្រូវហើយ! «ច» គឺ ច ចេក (Cha for Banana)!'
   ),
   (
     301, 'lesson-3', 'មេរៀនទី ៣ · ស្រៈនិស្ស័យ', '📖', 'ក + ា = កា', 'Vowel Sra Aa (ា)',
     'សំឡេងអាន៖ «ស្រៈ អា» (Sra Aa)', 'ស្រៈ អា... ក អា កា',
     'តើមួយណាជា «ស្រៈ អា» (ា) ក្នុងពាក្យ «កា»?', 'Which vowel is "Sra Aa" (ា) as in កា?',
-    '[{"letter":"ា","label":"ា (ស្រៈ អា)","speech":"ស្រៈ អា"},{"letter":"ិ","label":"ិ (ស្រៈ អិ)","speech":"ស្រៈ អិ"},{"letter":"ុ","label":"ុ (ស្រៈ អុ)","speech":"ស្រៈ អុ"}]'::jsonb,
+    jsonb_build_array(
+      jsonb_build_object('letter', 'ា', 'label', 'ា (ស្រៈ អា)', 'speech', 'ស្រៈ អា'),
+      jsonb_build_object('letter', 'ិ', 'label', 'ិ (ស្រៈ អិ)', 'speech', 'ស្រៈ អិ'),
+      jsonb_build_object('letter', 'ុ', 'label', 'ុ (ស្រៈ អុ)', 'speech', 'ស្រៈ អុ')
+    ),
     'ា', 'ត្រឹមត្រូវ! «ា» អានថា ស្រៈ អា (Sra Aa)!'
   ),
   (
     401, 'lesson-4', 'មេរៀនទី ៤ · ស្រៈពេញតួ', '🧙‍♂️', 'ឥសី', 'Hermit / Sage (Eysei)',
     'សំឡេងអាន៖ «ឥ» (Sra E) — ឥ ឥសី', 'ឥ... ឥ ឥសី',
     'តើពាក្យ «ឥសី» ផ្តើមដោយស្រៈពេញតួមួយណា?', 'Which independent vowel starts the word ឥសី (Hermit)?',
-    '[{"letter":"ឥ","label":"ឥ (ស្រៈ ឥ)","speech":"ឥ"},{"letter":"ឧ","label":"ឧ (ស្រៈ ឧ)","speech":"ឧ"},{"letter":"ឯ","label":"ឯ (ស្រៈ ឯ)","speech":"ឯ"}]'::jsonb,
+    jsonb_build_array(
+      jsonb_build_object('letter', 'ឥ', 'label', 'ឥ (ស្រៈ ឥ)', 'speech', 'ឥ'),
+      jsonb_build_object('letter', 'ឧ', 'label', 'ឧ (ស្រៈ ឧ)', 'speech', 'ឧ'),
+      jsonb_build_object('letter', 'ឯ', 'label', 'ឯ (ស្រៈ ឯ)', 'speech', 'ឯ')
+    ),
     'ឥ', 'ត្រឹមត្រូវ! «ឥ» គឺស្រៈពេញតួក្នុងពាក្យ ឥសី!'
   )
 ON CONFLICT (id) DO NOTHING;
