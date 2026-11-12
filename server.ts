@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import vercelQuizDataHandler from './api/quiz-data';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,11 +20,20 @@ async function startServer() {
     res.status(200).json({
       status: 'ok',
       application: 'Khmer Kids Quiz — រៀនអក្សរខ្មែរថ្នាក់ទី១',
-      platform: 'Google Cloud Run',
+      platform: 'Google Cloud Run & Vercel Ready',
       environment: isProd ? 'production' : 'development',
       spaRoutingFallback: true,
       timestamp: new Date().toISOString(),
     });
+  });
+
+  // Vercel Postgres / Neon Database Status & Sync Endpoints
+  app.all('/api/quiz-data', async (req, res) => {
+    await vercelQuizDataHandler(req, res);
+  });
+
+  app.get('/api/db-status', async (req, res) => {
+    await vercelQuizDataHandler(req, res);
   });
 
   const distPath = path.resolve(__dirname, 'dist');

@@ -2,8 +2,9 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Student-Locked Open-Access Context Provider for Khmer Kids Quiz
- * Automatically locks the user session to the 'student' role with no login required.
+ * Authentication & Role Management Context
+ * - Default open-access 'student' session for kids on /student
+ * - Supports direct URL access to /admin and /teacher for administrators
  */
 
 import React, {
@@ -23,18 +24,21 @@ import {
   RoutePath,
   UserAccount,
   AuditLogEntry,
+  ROLE_DEFAULT_ROUTE,
   ROLE_CAPABILITIES,
   INITIAL_USERS_DB,
   INITIAL_AUDIT_LOGS,
   normalizeRole,
+  toRoleSlug,
 } from '../rbacTypes';
-import { safeLoadFromStorage } from '../audioEngine';
+import { safeLoadFromStorage, playSoundEffect } from '../audioEngine';
 
 const STORAGE_KEYS = {
+  USERS: 'khmer_rbac_users_v1',
   STUDENT_PROFILE: 'khmer_student_open_profile_v1',
+  AUDIT_LOGS: 'khmer_rbac_audit_v1',
 };
 
-// Default Open-Access Student Profile (No Login Required)
 export const DEFAULT_STUDENT_ACCOUNT: UserAccount = {
   ...INITIAL_USERS_DB[2],
   role: UserRole.STUDENT,
@@ -49,18 +53,14 @@ export interface AuthActionResult {
 }
 
 export interface AuthContextValue {
-  /** Always returns the active Student profile (Open-Access Mode) */
   currentUser: UserAccount;
-  /** Locked to `'student'` */
   currentRoleSlug: RoleSlug;
-  /** Always true in open-access student mode */
   isAuthenticated: boolean;
   usersDb: UserAccount[];
   auditLogs: AuditLogEntry[];
   strictNavFiltering: boolean;
   setStrictNavFiltering: React.Dispatch<React.SetStateAction<boolean>>;
 
-  // Redirect/No-op Auth Actions (Locked to Student)
   login: (identifier: string, password: string) => AuthActionResult;
   register: (
     fullName: string,
@@ -71,11 +71,9 @@ export interface AuthContextValue {
   quickSwitchRole: (role: AnyRole) => RoutePath;
   logout: () => void;
 
-  // Role Evaluators (Locked to Student)
   hasRole: (allowedRoles: AnyRole[]) => boolean;
   hasPermission: (capability: PermissionCapability) => boolean;
 
-  // Student Star & Profile Updater
   updateCurrentUserProfile: (
     updates: Partial<Pick<UserAccount, 'fullName' | 'starsEarned' | 'quizzesCompleted'>>
   ) => void;
@@ -95,8 +93,33 @@ export interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Hydrate Student Profile & Stars from localStorage, enforcing role === UserRole.STUDENT
+  const [usersDb, setUsersDb] = useState<UserAccount[]>(() =>
+    safeLoadFromStorage<UserAccount[]>(
+      STORAGE_KEYS.USERS,
+      INITIAL_USERS_DB,
+      (val): val is UserAccount[] =>
+        Array.isArray(val) &&
+        val.length > 0 &&
+        val.every(
+          (item) =>
+            typeof item === 'object' &&
+            item !== null &&
+            'id' in item &&
+            'email' in item &&
+            'role' in item
+        )
+    )
+  );
+
+  // Default to Student open-access account on /student, or Admin account if visiting /admin directly
   const [currentUser, setCurrentUser] = useState<UserAccount>(() => {
+    const path = typeof window !== 'undefined' ? window.location.pathname.toLowerCase() : '/student';
+    if (path === '/admin' || path === '/admin-dashboard') {
+      return INITIAL_USERS_DB[0]; // Admin account
+    }
+    if (path === '/teacher' || path === '/teacher-dashboard') {
+      return INITIAL_USERS_DB[1]; // Teacher account
+    }
     const loaded = safeLoadFromStorage<UserAccount>(
       STORAGE_KEYS.STUDENT_PROFILE,
       DEFAULT_STUDENT_ACCOUNT,
@@ -107,7 +130,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         'fullName' in val &&
         'starsEarned' in val
     );
-    // Lock role strictly to STUDENT regardless of any legacy localStorage state
     return {
       ...loaded,
       role: UserRole.STUDENT,
@@ -115,30 +137,124 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
   });
 
-  const [usersDb] = useState<UserAccount[]>(() => [currentUser]);
-  const [auditLogs] = useState<AuditLogEntry[]>(INITIAL_AUDIT_LOGS);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() =>
+    safeLoadFromStorage<AuditLogEntry[]>(
+      STORAGE_KEYS.AUDIT_LOGS,
+      INITIAL_AUDIT_LOGS,
+      (val): val is AuditLogEntry[] =>
+        Array.isArray(val) &&
+        val.every((item) => typeof item === 'object' && item !== null && 'id' in item)
+    )
+  );
+
   const [strictNavFiltering, setStrictNavFiltering] = useState<boolean>(true);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(
-        STORAGE_KEYS.STUDENT_PROFILE,
-        JSON.stringify({ ...currentUser, role: UserRole.STUDENT })
-      );
+      window.localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(usersDb));
     } catch {
-      // Ignore storage errors
+      // Ignore
+    }
+  }, [usersDb]);
+
+  useEffect(() => {
+    if (currentUser.role === UserRole.STUDENT) {
+      try {
+        window.localStorage.setItem(
+          STORAGE_KEYS.STUDENT_PROFILE,
+          JSON.stringify(currentUser)
+        );
+      } catch {
+        // Ignore
+      }
     }
   }, [currentUser]);
 
-  const hasRole = useCallback((allowedRoles: AnyRole[]): boolean => {
-    const normalizedAllowed = allowedRoles.map(normalizeRole);
-    return normalizedAllowed.includes(UserRole.STUDENT);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
+    } catch {
+      // Ignore
+    }
+  }, [auditLogs]);
+
+  const logSecurityEvent = useCallback(
+    (
+      actorEmail: string,
+      actorRole: UserRole,
+      action: string,
+      targetPath: string,
+      outcome: 'ALLOWED' | 'DENIED'
+    ) => {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+      const entry: AuditLogEntry = {
+        id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: timeStr,
+        actorEmail,
+        actorRole,
+        action,
+        targetPath,
+        outcome,
+      };
+      setAuditLogs((prev) => [entry, ...prev.slice(0, 34)]);
+    },
+    []
+  );
+
+  const quickSwitchRole = useCallback(
+    (role: AnyRole): RoutePath => {
+      const canonicalRole = normalizeRole(role);
+      const demoUser =
+        usersDb.find((u) => u.role === canonicalRole && u.status === 'Active') ||
+        INITIAL_USERS_DB.find((u) => u.role === canonicalRole)!;
+      setCurrentUser(demoUser);
+      playSoundEffect('tap');
+      return ROLE_DEFAULT_ROUTE[demoUser.role];
+    },
+    [usersDb]
+  );
+
+  const login = useCallback(
+    (identifier: string, password: string): AuthActionResult => {
+      const matched = usersDb.find(
+        (u) =>
+          (u.email.toLowerCase() === identifier.trim().toLowerCase() ||
+            u.username.toLowerCase() === identifier.trim().toLowerCase()) &&
+          u.password === password.trim()
+      );
+      if (!matched) {
+        return { success: false, error: 'គណនី ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវទេ (Invalid credentials).' };
+      }
+      setCurrentUser(matched);
+      return { success: true, redirectTo: ROLE_DEFAULT_ROUTE[matched.role] };
+    },
+    [usersDb]
+  );
+
+  const register = useCallback((): AuthActionResult => {
+    return { success: true, redirectTo: '/student' };
   }, []);
 
-  const hasPermission = useCallback((capability: PermissionCapability): boolean => {
-    const capabilities = ROLE_CAPABILITIES[UserRole.STUDENT] || [];
-    return capabilities.includes(capability);
+  const logout = useCallback(() => {
+    setCurrentUser(DEFAULT_STUDENT_ACCOUNT);
   }, []);
+
+  const hasRole = useCallback(
+    (allowedRoles: AnyRole[]): boolean => {
+      const normalizedAllowed = allowedRoles.map(normalizeRole);
+      return normalizedAllowed.includes(currentUser.role);
+    },
+    [currentUser.role]
+  );
+
+  const hasPermission = useCallback(
+    (capability: PermissionCapability): boolean => {
+      const capabilities = ROLE_CAPABILITIES[currentUser.role] || [];
+      return capabilities.includes(capability);
+    },
+    [currentUser.role]
+  );
 
   const updateCurrentUserProfile = useCallback(
     (
@@ -146,38 +262,63 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         Pick<UserAccount, 'fullName' | 'starsEarned' | 'quizzesCompleted'>
       >
     ) => {
-      setCurrentUser((prev) => ({
-        ...prev,
-        ...updates,
-        role: UserRole.STUDENT,
-      }));
+      setCurrentUser((prev) => {
+        const updated = { ...prev, ...updates };
+        setUsersDb((db) => db.map((u) => (u.id === updated.id ? updated : u)));
+        return updated;
+      });
     },
     []
   );
 
-  // Legacy auth functions kept for interface compatibility; always redirect to '/student'
-  const login = useCallback((): AuthActionResult => {
-    return { success: true, redirectTo: '/student' };
+  const changeUserRole = useCallback((userId: string, newRole: AnyRole) => {
+    const canonicalRole = normalizeRole(newRole);
+    setUsersDb((prev) =>
+      prev.map((u) => (u.id === userId ? { ...u, role: canonicalRole } : u))
+    );
   }, []);
 
-  const register = useCallback((): AuthActionResult => {
-    return { success: true, redirectTo: '/student' };
+  const toggleUserStatus = useCallback((userId: string) => {
+    setUsersDb((prev) =>
+      prev.map((u) =>
+        u.id === userId
+          ? { ...u, status: u.status === 'Active' ? 'Suspended' : 'Active' }
+          : u
+      )
+    );
   }, []);
 
-  const quickSwitchRole = useCallback((): RoutePath => {
-    return '/student';
+  const deleteUser = useCallback((userId: string) => {
+    setUsersDb((prev) => prev.filter((u) => u.id !== userId));
   }, []);
 
-  const logout = useCallback(() => {
-    // Open-access student mode does not log out to a login screen
-  }, []);
-
-  const noop = useCallback(() => {}, []);
+  const createUserByAdmin = useCallback(
+    (fullName: string, email: string, role: AnyRole) => {
+      const trimmedEmail = email.trim().toLowerCase();
+      const trimmedName = fullName.trim();
+      if (!trimmedEmail || !trimmedName) return;
+      const canonicalRole = normalizeRole(role);
+      const created: UserAccount = {
+        id: `usr-${Date.now()}`,
+        username: trimmedEmail.split('@')[0].toLowerCase(),
+        email: trimmedEmail,
+        password: 'Password123!',
+        fullName: trimmedName,
+        role: canonicalRole,
+        status: 'Active',
+        starsEarned: 0,
+        quizzesCompleted: 0,
+        createdAt: new Date().toISOString().split('T')[0],
+      };
+      setUsersDb((prev) => [created, ...prev]);
+    },
+    []
+  );
 
   const value = useMemo<AuthContextValue>(
     () => ({
       currentUser,
-      currentRoleSlug: 'student',
+      currentRoleSlug: toRoleSlug(currentUser.role),
       isAuthenticated: true,
       usersDb,
       auditLogs,
@@ -190,11 +331,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       hasRole,
       hasPermission,
       updateCurrentUserProfile,
-      changeUserRole: noop,
-      toggleUserStatus: noop,
-      deleteUser: noop,
-      createUserByAdmin: noop,
-      logSecurityEvent: noop,
+      changeUserRole,
+      toggleUserStatus,
+      deleteUser,
+      createUserByAdmin,
+      logSecurityEvent,
     }),
     [
       currentUser,
@@ -208,7 +349,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       hasRole,
       hasPermission,
       updateCurrentUserProfile,
-      noop,
+      changeUserRole,
+      toggleUserStatus,
+      deleteUser,
+      createUserByAdmin,
+      logSecurityEvent,
     ]
   );
 
@@ -223,11 +368,6 @@ export function useAuth(): AuthContextValue {
   return ctx;
 }
 
-/**
- * Declarative Role-Based Conditional UI Rendering Component
- * Since the app is locked to `'student'`, any block restricted to `['teacher', 'admin']`
- * automatically evaluates to false and stays hidden.
- */
 export const RoleGuard: React.FC<{
   allowedRoles: AnyRole[];
   fallback?: ReactNode;

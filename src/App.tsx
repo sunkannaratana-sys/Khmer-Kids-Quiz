@@ -26,16 +26,28 @@ import {
   Share,
   User,
   BookOpen,
-  LayoutGrid
+  LayoutGrid,
+  Users,
+  Trash2,
+  Plus,
+  FileEdit,
+  ShieldCheck,
+  Database,
+  Server
 } from 'lucide-react';
 import { STANDALONE_HTML_CODE } from './standaloneHtmlTemplate';
+import {
+  VERCEL_POSTGRES_SCHEMA_SQL,
+  VERCEL_JSON_CONFIG,
+  DbStatusResponse
+} from './vercelDbTemplate';
 import {
   useOnlineStatus,
   CAPACITOR_ANDROID_BUILD_SCRIPT,
   CAPACITOR_IOS_BUILD_SCRIPT,
   generateIOSMobileConfig
 } from './usePWAInstall';
-import { RoutePath } from './rbacTypes';
+import { RoutePath, UserRole } from './rbacTypes';
 import {
   playSoundEffect,
   speakKhmerText,
@@ -457,50 +469,57 @@ function toKhmerNumeral(num: number): string {
 type MobileOS = 'IOS' | 'ANDROID';
 type StudentSubTab = 'QUIZ' | 'LEARN' | 'PROFILE';
 
-const STUDENT_ALLOWED_ROUTES: RoutePath[] = [
+const VALID_DIRECT_ROUTES: RoutePath[] = [
   '/student',
+  '/admin',
+  '/teacher',
   '/mobile-install',
   '/code',
 ];
 
 /**
- * Resolves any URL path and automatically redirects restricted paths
- * (`/teacher`, `/admin`, `/login`, `/teacher-dashboard`, `/admin-dashboard`, `/`)
- * back to the main student page (`/student`).
+ * Resolves URL paths:
+ * - Default `/` or `/login` goes straight to `/student` (open-access Student mode)
+ * - Direct secret URLs `/admin` (or `/admin-dashboard`) and `/teacher` (or `/teacher-dashboard`)
+ *   open the Admin Console or Teacher Studio for administrators.
  */
-function resolveStudentRoute(rawPath: string): RoutePath {
+function resolveRoute(rawPath: string): RoutePath {
   const normalized = rawPath.toLowerCase().trim();
-  if (
-    normalized === '/teacher' ||
-    normalized === '/admin' ||
-    normalized === '/login' ||
-    normalized === '/teacher-dashboard' ||
-    normalized === '/admin-dashboard' ||
-    normalized === '/'
-  ) {
-    return '/student';
+  if (normalized === '/admin' || normalized === '/admin-dashboard') {
+    return '/admin';
   }
-  if (STUDENT_ALLOWED_ROUTES.includes(normalized as RoutePath)) {
+  if (normalized === '/teacher' || normalized === '/teacher-dashboard') {
+    return '/teacher';
+  }
+  if (VALID_DIRECT_ROUTES.includes(normalized as RoutePath)) {
     return normalized as RoutePath;
   }
   return '/student';
 }
 
 export default function App() {
-  // 1. Consume Open-Access Student Context (Always locked to 'student' role)
-  const { currentUser, updateCurrentUserProfile } = useAuth();
+  // 1. Consume Context
+  const {
+    currentUser,
+    usersDb,
+    auditLogs,
+    updateCurrentUserProfile,
+    changeUserRole,
+    toggleUserStatus,
+    deleteUser,
+    createUserByAdmin,
+  } = useAuth();
 
   const [currentRoute, setCurrentRoute] = useState<RoutePath>(() => {
     if (typeof window !== 'undefined') {
-      return resolveStudentRoute(window.location.pathname);
+      return resolveRoute(window.location.pathname);
     }
     return '/student';
   });
 
-  // Synchronize URL bar & enforce redirect if URL is /teacher, /admin, or /login
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const safeRoute = resolveStudentRoute(currentRoute);
+    const safeRoute = resolveRoute(currentRoute);
     if (safeRoute !== currentRoute) {
       setCurrentRoute(safeRoute);
       return;
@@ -517,15 +536,8 @@ export default function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handlePopState = () => {
-      const safeRoute = resolveStudentRoute(window.location.pathname);
+      const safeRoute = resolveRoute(window.location.pathname);
       setCurrentRoute(safeRoute);
-      if (window.location.pathname !== safeRoute) {
-        try {
-          window.history.replaceState({}, '', safeRoute);
-        } catch {
-          // Ignore
-        }
-      }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -533,12 +545,25 @@ export default function App() {
 
   // 2. Student Portal & Lesson-Based Quiz Selection State
   const [studentSubTab, setStudentSubTab] = useState<StudentSubTab>('QUIZ');
-  // `selectedLessonId === null` means the user is on the Lesson Selection Screen (ការជ្រើសរើសកម្រងសំណួរតាមមេរៀន)
   const [selectedLessonId, setSelectedLessonId] = useState<LessonId | 'ALL' | null>(null);
   const [profileNameEdit, setProfileNameEdit] = useState('');
   const [profileSavedToast, setProfileSavedToast] = useState(false);
   const [selectedOS, setSelectedOS] = useState<MobileOS>('IOS');
-  const [questions] = useState<QuizQuestion[]>(INITIAL_QUIZ_DATA);
+  const [questions, setQuestions] = useState<QuizQuestion[]>(INITIAL_QUIZ_DATA);
+
+  // Admin & Teacher Portal States (Only used when visiting /admin or /teacher directly)
+  const [newAdminUserEmail, setNewAdminUserEmail] = useState('');
+  const [newAdminUserName, setNewAdminUserName] = useState('');
+  const [newAdminUserRole, setNewAdminUserRole] = useState<UserRole>(UserRole.STUDENT);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+
+  const [newQIcon, setNewQIcon] = useState('🐢');
+  const [newQLessonId, setNewQLessonId] = useState<LessonId>('lesson-2');
+  const [newQWordKhmer, setNewQWordKhmer] = useState('អណ្តើក');
+  const [newQWordEng, setNewQWordEng] = useState('Turtle (Andaek)');
+  const [newQCorrect, setNewQCorrect] = useState('អ');
+  const [newQWrong1, setNewQWrong1] = useState('ក');
+  const [newQWrong2, setNewQWrong2] = useState('ស');
 
   const isOnline = useOnlineStatus();
 
@@ -560,9 +585,13 @@ export default function App() {
     )
   );
 
-  // Code & URL Copy States
+  // Code, SQL & URL Copy States
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
+  const [copiedSql, setCopiedSql] = useState<boolean>(false);
+  const [copiedVercelJson, setCopiedVercelJson] = useState<boolean>(false);
+  const [dbStatus, setDbStatus] = useState<DbStatusResponse | null>(null);
+  const [isCheckingDb, setIsCheckingDb] = useState<boolean>(false);
 
   /**
    * DYNAMIC QUESTION FILTERING BY `lessonId`
@@ -582,6 +611,44 @@ export default function App() {
     }
   }, []);
 
+  const checkVercelDatabaseStatus = useCallback(async () => {
+    setIsCheckingDb(true);
+    try {
+      const res = await fetch('/api/quiz-data');
+      if (res.ok) {
+        const data = (await res.json()) as DbStatusResponse;
+        setDbStatus(data);
+      }
+    } catch {
+      // Ignore network error in offline mode
+    } finally {
+      setIsCheckingDb(false);
+    }
+  }, []);
+
+  const handleInitVercelDatabase = async () => {
+    setIsCheckingDb(true);
+    try {
+      const res = await fetch('/api/quiz-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'init' }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as DbStatusResponse;
+        setDbStatus(data);
+      }
+    } catch {
+      // Ignore network error in offline mode
+    } finally {
+      setIsCheckingDb(false);
+    }
+  };
+
+  useEffect(() => {
+    checkVercelDatabaseStatus();
+  }, [checkVercelDatabaseStatus]);
+
   useEffect(() => {
     if (currentUser) {
       setProfileNameEdit(currentUser.fullName);
@@ -593,14 +660,46 @@ export default function App() {
     setLastSpokenToast(displayLabel || text);
   }, []);
 
-  /**
-   * Student-Locked Navigation Handler
-   * Any attempt to navigate to `/teacher`, `/admin`, or `/login` is automatically redirected to `/student`.
-   */
   const navigateToRoute = useCallback((targetRoute: RoutePath) => {
-    const safeDestination = resolveStudentRoute(targetRoute);
+    const safeDestination = resolveRoute(targetRoute);
     setCurrentRoute(safeDestination);
   }, []);
+
+  const handleCreateUserByAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdminUserEmail.trim() || !newAdminUserName.trim()) return;
+    createUserByAdmin(newAdminUserName, newAdminUserEmail, newAdminUserRole);
+    setNewAdminUserEmail('');
+    setNewAdminUserName('');
+  };
+
+  const handleAddCustomQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newQWordKhmer.trim() || !newQCorrect.trim()) return;
+    const targetLesson = QUIZ_LESSONS.find((l) => l.id === newQLessonId) || QUIZ_LESSONS[0];
+    const newQuestion: QuizQuestion = {
+      id: Date.now(),
+      lessonId: newQLessonId,
+      categoryLabel: `${targetLesson.numberLabel} · ${targetLesson.titleKhmer}`,
+      icon: newQIcon || '⭐',
+      clueWordKhmer: newQWordKhmer.trim(),
+      clueWordEnglish: newQWordEng.trim() || newQWordKhmer.trim(),
+      phoneticHint: `សំឡេងអាន៖ «${newQCorrect.trim()}» — ${newQWordKhmer.trim()}`,
+      speechText: `${newQCorrect.trim()}... ${newQWordKhmer.trim()}`,
+      questionKhmer: `តើពាក្យ «${newQWordKhmer.trim()}» ប្រើតួអក្សរមួយណា?`,
+      questionEnglish: `Which Khmer letter belongs to "${newQWordEng.trim()}"?`,
+      options: [
+        { letter: newQCorrect.trim(), label: `${newQCorrect.trim()}`, speech: newQCorrect.trim() },
+        { letter: newQWrong1.trim() || 'ខ', label: `${newQWrong1.trim() || 'ខ'}`, speech: newQWrong1.trim() || 'ខ' },
+        { letter: newQWrong2.trim() || 'គ', label: `${newQWrong2.trim() || 'គ'}`, speech: newQWrong2.trim() || 'គ' },
+      ],
+      correctLetter: newQCorrect.trim(),
+      explanation: `ត្រឹមត្រូវ! «${newQCorrect.trim()}» គឺសម្រាប់ពាក្យ ${newQWordKhmer.trim()}!`,
+    };
+    setQuestions((prev) => [...prev, newQuestion]);
+    setNewQWordKhmer('');
+    setNewQWordEng('');
+  };
 
   // ==========================================================================
   // LESSON SELECTION & QUIZ FLOW HANDLERS
@@ -690,6 +789,20 @@ export default function App() {
           starsEarned: currentUser.starsEarned + score,
           quizzesCompleted: currentUser.quizzesCompleted + 1,
         });
+
+        // Non-blocking sync to Vercel Postgres (/api/quiz-data) when online
+        fetch('/api/quiz-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'save_score',
+            userId: currentUser.id,
+            lessonId: selectedLessonId || 'ALL',
+            score,
+          }),
+        }).catch(() => {
+          // Graceful offline/local fallback
+        });
       }
     }
   };
@@ -736,6 +849,38 @@ export default function App() {
     } catch {
       // Fallback
     }
+  };
+
+  const handleCopyVercelSql = async () => {
+    try {
+      await navigator.clipboard.writeText(VERCEL_POSTGRES_SCHEMA_SQL);
+      setCopiedSql(true);
+      setTimeout(() => setCopiedSql(false), 2500);
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleCopyVercelJson = async () => {
+    try {
+      await navigator.clipboard.writeText(VERCEL_JSON_CONFIG);
+      setCopiedVercelJson(true);
+      setTimeout(() => setCopiedVercelJson(false), 2500);
+    } catch {
+      // Fallback
+    }
+  };
+
+  const handleDownloadSqlFile = () => {
+    const blob = new Blob([VERCEL_POSTGRES_SCHEMA_SQL], { type: 'application/sql;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'schema.sql';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   const handleDownloadStandaloneHtml = () => {
@@ -1489,6 +1634,514 @@ export default function App() {
               )}
             </div>
           </ProtectedRoute>
+        )}
+
+        {/* ===================================================================
+            DIRECT SECRET ADMIN CONSOLE URL (/admin)
+            (Hidden from Student Navbar; accessible via direct /admin URL)
+            =================================================================== */}
+        {currentRoute === '/admin' && (
+          <div className="space-y-8 animate-pop">
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
+                <div>
+                  <p className="text-xs font-mono font-bold text-indigo-700 flex items-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>DIRECT ADMIN PORTAL · URL: /admin</span>
+                  </p>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
+                    ផ្ទាំងគ្រប់គ្រងប្រព័ន្ធ (Admin Console &amp; User Management)
+                  </h1>
+                </div>
+                <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute('/teacher')}
+                    className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold whitespace-nowrap cursor-pointer"
+                  >
+                    គ្រប់គ្រងសំណួរគ្រូបង្រៀន (/teacher)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute('/student')}
+                    className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-bold whitespace-nowrap cursor-pointer"
+                  >
+                    ត្រឡប់ទៅទំព័រសិស្ស (/student)
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 pt-6 tabular-nums">
+                <div>
+                  <p className="text-xs font-bold text-slate-500">គណនីសរុប (Total Users)</p>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">
+                    {usersDb.length}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500">សំណួរតាមមេរៀន (Total Questions)</p>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">
+                    {questions.length}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500">ផ្កាយសិស្សសរុប (Total Stars)</p>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-amber-600 mt-1">
+                    ⭐ {usersDb.reduce((acc, u) => acc + u.starsEarned, 0)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-500">កំណត់ហេតុសុវត្ថិភាព (Audit Logs)</p>
+                  <p className="text-2xl sm:text-3xl font-extrabold text-emerald-600 mt-1">
+                    {auditLogs.length}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* VERCEL POSTGRES DATABASE SETUP & LIVE STATUS PANEL */}
+            <div className="bg-white rounded-3xl border border-indigo-200 p-6 sm:p-8 shadow-sm space-y-6">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-200">
+                <div>
+                  <div className="inline-flex items-center gap-2 text-xs font-mono font-bold text-indigo-700 mb-1">
+                    <Database className="w-4 h-4" />
+                    <span>VERCEL POSTGRES / NEON SERVERLESS DATABASE (`/api/quiz-data`)</span>
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-slate-900">
+                    ផ្ទាំងរៀបចំ Database សម្រាប់ប្រើក្នុង Vercel (Vercel Database Setup)
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-600 mt-1">
+                    គាំទ្រ Vercel Postgres, Neon Serverless និង Supabase តាមរយៈ Environment Variable <code className="font-mono font-bold text-indigo-700">POSTGRES_URL</code> ឬ <code className="font-mono font-bold text-indigo-700">DATABASE_URL</code>។
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-3 flex-wrap shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleInitVercelDatabase}
+                    disabled={isCheckingDb}
+                    className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                  >
+                    <Server className="w-4 h-4" />
+                    <span>
+                      {isCheckingDb
+                        ? 'កំពុងភ្ជាប់ Database...'
+                        : 'តេស្ត និងបង្កើតតារាង (Test & Init Tables)'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyVercelSql}
+                    className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold flex items-center gap-2 cursor-pointer"
+                  >
+                    {copiedSql ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                    <span>{copiedSql ? 'បានចម្លង SQL!' : 'ចម្លង db/schema.sql'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadSqlFile}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-2 cursor-pointer"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>ទាញយក schema.sql</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Live Connection Status Banner */}
+              <div
+                className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                  dbStatus?.connected
+                    ? 'bg-emerald-50/80 border-emerald-300 text-emerald-950'
+                    : 'bg-amber-50/80 border-amber-300 text-slate-900'
+                }`}
+              >
+                <div className="space-y-0.5">
+                  <p className="text-xs font-mono font-bold uppercase">
+                    STATUS: {dbStatus?.connected ? '● CONNECTED TO VERCEL POSTGRES' : '● LOCAL FALLBACK READY (AWAITING POSTGRES_URL IN VERCEL)'}
+                  </p>
+                  <p className="text-sm font-bold">
+                    {dbStatus?.messageKhmer || 'កំពុងត្រួតពិនិត្យស្ថានភាព Database...'}
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    Provider: <span className="font-mono font-semibold">{dbStatus?.provider || 'Local Fallback'}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyVercelJson}
+                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-mono font-bold text-slate-800 flex items-center gap-1.5 self-start sm:self-center shrink-0 cursor-pointer"
+                >
+                  {copiedVercelJson ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copiedVercelJson ? 'Copied vercel.json!' : 'Copy vercel.json'}</span>
+                </button>
+              </div>
+
+              {/* 3-Step Guide & SQL Preview */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-5 space-y-3 text-xs sm:text-sm text-slate-700 bg-slate-50 rounded-2xl p-5 border border-slate-200">
+                  <h3 className="font-bold text-slate-900 text-base">
+                    របៀបភ្ជាប់ Database ក្នុង Vercel (៣ ជំហានងាយៗ)៖
+                  </h3>
+                  <ol className="list-decimal list-inside space-y-2.5 leading-relaxed">
+                    <li>
+                      ចូលទៅកាន់ <strong>Vercel Dashboard</strong> &rarr; ជ្រើសរើស Project របស់អ្នក &rarr; ចុចផ្ទាំង <strong>Storage</strong>។
+                    </li>
+                    <li>
+                      ចុច <strong>Create Database</strong> &rarr; ជ្រើសរើស <strong>Postgres (Neon Serverless)</strong> រួចចុច <strong>Connect to Project</strong> (Vercel នឹងបង្កើត <code className="font-mono font-bold text-indigo-700">POSTGRES_URL</code> និង <code className="font-mono font-bold text-indigo-700">DATABASE_URL</code> ដោយស្វ័យប្រវត្តិ)។
+                    </li>
+                    <li>
+                      ចម្លងកូដ <code className="font-mono font-bold">db/schema.sql</code> ខាងស្តាំដៃ យកទៅ Run ក្នុងផ្ទាំង <strong>SQL Editor</strong> របស់ Vercel ឬចុចប៊ូតុង <strong>Test &amp; Init Tables</strong> ខាងលើជាការស្រេច!
+                    </li>
+                  </ol>
+                </div>
+
+                <div className="lg:col-span-7">
+                  <pre className="w-full max-h-[240px] overflow-auto rounded-2xl bg-slate-900 text-slate-100 p-4 text-xs font-mono leading-relaxed">
+                    <code>{VERCEL_POSTGRES_SCHEMA_SQL}</code>
+                  </pre>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+              <div className="lg:col-span-8 bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                  <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                    <Users className="w-5 h-5 text-slate-700" />
+                    <span>គ្រប់គ្រងអ្នកប្រើប្រាស់ និងតួនាទី (User &amp; Role Management)</span>
+                  </h2>
+                  <input
+                    type="text"
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    placeholder="ស្វែងរកឈ្មោះ ឬ អ៊ីមែល..."
+                    className="rounded-xl border border-slate-300 px-3.5 py-2 text-xs focus:border-slate-900 focus:outline-none"
+                  />
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm tabular-nums">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-500 font-bold">
+                        <th className="py-3 pr-4">User / Email</th>
+                        <th className="py-3 px-3">RBAC Role</th>
+                        <th className="py-3 px-3">Status</th>
+                        <th className="py-3 px-3 text-right">Quiz Report</th>
+                        <th className="py-3 pl-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200/70">
+                      {usersDb
+                        .filter(
+                          (u) =>
+                            u.fullName.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
+                            u.email.toLowerCase().includes(userSearchQuery.toLowerCase())
+                        )
+                        .map((u) => (
+                          <tr key={u.id} className="hover:bg-slate-50/80">
+                            <td className="py-3.5 pr-4">
+                              <div className="font-bold text-slate-900">{u.fullName}</div>
+                              <div className="text-xs text-slate-500 font-mono">{u.email}</div>
+                            </td>
+                            <td className="py-3.5 px-3">
+                              <select
+                                value={u.role}
+                                onChange={(e) =>
+                                  changeUserRole(u.id, e.target.value as UserRole)
+                                }
+                                className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
+                              >
+                                <option value={UserRole.ADMIN}>ADMIN</option>
+                                <option value={UserRole.TEACHER}>TEACHER</option>
+                                <option value={UserRole.STUDENT}>STUDENT</option>
+                              </select>
+                            </td>
+                            <td className="py-3.5 px-3">
+                              <button
+                                type="button"
+                                onClick={() => toggleUserStatus(u.id)}
+                                className={`font-bold text-xs cursor-pointer underline underline-offset-4 ${
+                                  u.status === 'Active' ? 'text-emerald-700' : 'text-rose-600'
+                                }`}
+                              >
+                                {u.status === 'Active' ? '● Active' : '▲ Suspended'}
+                              </button>
+                            </td>
+                            <td className="py-3.5 px-3 text-right font-mono text-xs">
+                              ⭐ {u.starsEarned} ({u.quizzesCompleted} runs)
+                            </td>
+                            <td className="py-3.5 pl-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => deleteUser(u.id)}
+                                className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4 inline" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="lg:col-span-4 space-y-6">
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                  <h3 className="text-base font-bold text-slate-900 mb-1">
+                    បន្ថែមអ្នកប្រើប្រាស់ថ្មី (Create User)
+                  </h3>
+                  <form onSubmit={handleCreateUserByAdmin} className="space-y-3 mt-3">
+                    <input
+                      type="text"
+                      value={newAdminUserName}
+                      onChange={(e) => setNewAdminUserName(e.target.value)}
+                      placeholder="Full Name (e.g. Nary Kim)"
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                      required
+                    />
+                    <input
+                      type="email"
+                      value={newAdminUserEmail}
+                      onChange={(e) => setNewAdminUserEmail(e.target.value)}
+                      placeholder="Email (e.g. nary@school.edu.kh)"
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
+                      required
+                    />
+                    <select
+                      value={newAdminUserRole}
+                      onChange={(e) => setNewAdminUserRole(e.target.value as UserRole)}
+                      className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold bg-white"
+                    >
+                      <option value={UserRole.STUDENT}>Role: STUDENT</option>
+                      <option value={UserRole.TEACHER}>Role: TEACHER</option>
+                      <option value={UserRole.ADMIN}>Role: ADMIN</option>
+                    </select>
+                    <button
+                      type="submit"
+                      className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs cursor-pointer"
+                    >
+                      + បង្កើតគណនី (Add User)
+                    </button>
+                  </form>
+                </div>
+
+                <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
+                  <h3 className="text-base font-bold text-slate-900 mb-3">
+                    កំណត់ហេតុសុវត្ថិភាព (Security Audit Log)
+                  </h3>
+                  <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1 text-xs font-mono">
+                    {auditLogs.map((log) => (
+                      <div
+                        key={log.id}
+                        className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/70"
+                      >
+                        <div className="flex items-center justify-between text-slate-500">
+                          <span>{log.timestamp} · {log.actorRole}</span>
+                          <span
+                            className={
+                              log.outcome === 'ALLOWED'
+                                ? 'text-emerald-700 font-bold'
+                                : 'text-rose-600 font-bold'
+                            }
+                          >
+                            {log.outcome}
+                          </span>
+                        </div>
+                        <div className="text-slate-800 font-sans font-semibold mt-0.5">
+                          {log.action}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ===================================================================
+            DIRECT SECRET TEACHER STUDIO URL (/teacher)
+            (Hidden from Student Navbar; accessible via direct /teacher URL)
+            =================================================================== */}
+        {currentRoute === '/teacher' && (
+          <div className="space-y-8 animate-pop">
+            <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
+                <div>
+                  <p className="text-xs font-mono font-bold text-amber-700">
+                    DIRECT TEACHER STUDIO · URL: /teacher
+                  </p>
+                  <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
+                    ផ្ទាំងគ្រប់គ្រងមេរៀន និងសំណួរ (Teacher / Editor Content Studio)
+                  </h1>
+                </div>
+                <div className="flex items-center gap-3 shrink-0 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => navigateToRoute('/admin')}
+                    className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold whitespace-nowrap cursor-pointer"
+                  >
+                    ផ្ទាំង Admin (/admin)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedLessonId(null);
+                      navigateToRoute('/student');
+                    }}
+                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap cursor-pointer"
+                  >
+                    ត្រឡប់ទៅមេរៀនសិស្ស (/student) &rarr;
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6">
+                <div className="lg:col-span-5">
+                  <h2 className="text-lg font-bold text-slate-900 mb-2 flex items-center gap-2">
+                    <FileEdit className="w-5 h-5 text-amber-600" />
+                    <span>បន្ថែមសំណួរថ្មីតាមមេរៀន (Add Question to Lesson)</span>
+                  </h2>
+                  <form onSubmit={handleAddCustomQuestion} className="space-y-3.5">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        ជ្រើសរើសមេរៀន (Target Lesson ID)
+                      </label>
+                      <select
+                        value={newQLessonId}
+                        onChange={(e) => setNewQLessonId(e.target.value as LessonId)}
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs sm:text-sm font-bold bg-white"
+                      >
+                        {QUIZ_LESSONS.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.numberLabel}: {l.titleKhmer}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          រូបតំណាង (Icon)
+                        </label>
+                        <input
+                          type="text"
+                          value={newQIcon}
+                          onChange={(e) => setNewQIcon(e.target.value)}
+                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg text-center"
+                          required
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="block text-xs font-bold text-slate-700 mb-1">
+                          ពាក្យគំរូភាសាខ្មែរ (Khmer Clue Word)
+                        </label>
+                        <input
+                          type="text"
+                          value={newQWordKhmer}
+                          onChange={(e) => setNewQWordKhmer(e.target.value)}
+                          placeholder="ឧទាហរណ៍៖ អណ្តើក"
+                          className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-bold"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <input
+                      type="text"
+                      value={newQWordEng}
+                      onChange={(e) => setNewQWordEng(e.target.value)}
+                      placeholder="English Meaning (e.g. Turtle)"
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm"
+                      required
+                    />
+
+                    <div className="grid grid-cols-3 gap-3">
+                      <input
+                        type="text"
+                        value={newQCorrect}
+                        onChange={(e) => setNewQCorrect(e.target.value)}
+                        placeholder="ចម្លើយត្រូវ"
+                        className="w-full rounded-xl border-2 border-emerald-400 bg-emerald-50/40 px-3 py-2 text-lg font-bold text-center"
+                        required
+                      />
+                      <input
+                        type="text"
+                        value={newQWrong1}
+                        onChange={(e) => setNewQWrong1(e.target.value)}
+                        placeholder="ខុស ១"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-bold text-center"
+                        required
+                      />
+                      <input
+                        type="text"
+                        value={newQWrong2}
+                        onChange={(e) => setNewQWrong2(e.target.value)}
+                        placeholder="ខុស ២"
+                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-bold text-center"
+                        required
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-3 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>បន្ថែមសំណួរទៅក្នុងមេរៀន (Add Question)</span>
+                    </button>
+                  </form>
+                </div>
+
+                <div className="lg:col-span-7">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-lg font-bold text-slate-900">
+                      កម្រងសំណួរតាមមេរៀន ({questions.length} សំណួរ)
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={() => setQuestions(INITIAL_QUIZ_DATA)}
+                      className="text-xs font-bold text-slate-500 hover:text-slate-900 underline cursor-pointer"
+                    >
+                      កំណត់ឡើងវិញ (Restore Default 16)
+                    </button>
+                  </div>
+                  <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                    {questions.map((q, idx) => (
+                      <div
+                        key={q.id}
+                        className="flex items-center justify-between gap-4 p-3 rounded-2xl border border-slate-200 bg-slate-50/60"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">{q.icon}</span>
+                          <div>
+                            <p className="text-xs font-bold text-amber-700">{q.categoryLabel}</p>
+                            <p className="font-bold text-slate-900 text-sm">
+                              {idx + 1}. «{q.correctLetter}» — {q.clueWordKhmer} ({q.clueWordEnglish})
+                            </p>
+                          </div>
+                        </div>
+                        {questions.length > 4 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setQuestions((prev) => prev.filter((item) => item.id !== q.id))
+                            }
+                            className="p-1.5 text-slate-400 hover:text-rose-600 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* ===================================================================
