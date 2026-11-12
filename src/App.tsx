@@ -22,21 +22,9 @@ import {
   Copy,
   Check,
   Code2,
-  Plus,
-  Trash2,
   WifiOff,
   Share,
-  Eye,
-  EyeOff,
-  ShieldAlert,
-  ShieldCheck,
-  LogOut,
-  UserCheck,
-  Lock,
-  Mail,
   User,
-  FileEdit,
-  Users,
   BookOpen,
   LayoutGrid
 } from 'lucide-react';
@@ -47,18 +35,15 @@ import {
   CAPACITOR_IOS_BUILD_SCRIPT,
   generateIOSMobileConfig
 } from './usePWAInstall';
+import { RoutePath } from './rbacTypes';
 import {
-  UserRole,
-  RoutePath,
-  UserAccount,
-  LessonPost,
-  AuditLogEntry,
-  ROLE_DEFAULT_ROUTE,
-  ROUTE_PERMISSIONS,
-  INITIAL_USERS_DB,
-  INITIAL_LESSONS_DB,
-  INITIAL_AUDIT_LOGS
-} from './rbacTypes';
+  playSoundEffect,
+  speakKhmerText,
+  cancelActiveSpeech,
+  safeLoadFromStorage
+} from './audioEngine';
+import { useAuth } from './context/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
 
 // ============================================================================
 // 1. LESSON DEFINITIONS & QUESTION DATASET TAGGED BY `lessonId`
@@ -457,13 +442,6 @@ export const INITIAL_QUIZ_DATA: QuizQuestion[] = [
 
 const PUBLIC_APP_URL = 'https://ais-pre-g6u6jad633q3ec5vfzslex-763946904784.asia-east1.run.app';
 
-const STORAGE_KEYS = {
-  USERS: 'khmer_rbac_users_v1',
-  SESSION: 'khmer_rbac_session_v1',
-  LESSONS: 'khmer_rbac_lessons_v1',
-  AUDIT_LOGS: 'khmer_rbac_audit_v1',
-};
-
 function toKhmerNumeral(num: number): string {
   const khmerDigits = ['០', '១', '២', '៣', '៤', '៥', '៦', '៧', '៨', '៩'];
   return String(num)
@@ -473,386 +451,63 @@ function toKhmerNumeral(num: number): string {
 }
 
 // ============================================================================
-// WEB AUDIO & SPEECH SYNTHESIS ENGINE (GUARANTEED SOUND ON EVERY CLICK)
-// ============================================================================
-
-let sharedAudioCtx: AudioContext | null = null;
-// Retain utterance reference at module scope so Chrome GC never drops active speech
-let activeSpeechUtterance: SpeechSynthesisUtterance | null = null;
-let speechTimeoutId: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * Phonetic pronunciation dictionary for devices/browsers that do not have a
- * native `km-KH` voice installed in the OS (where raw Khmer Unicode would
- * otherwise be skipped silently by default system TTS voices).
- */
-const KHMER_PHONETIC_MAP: Record<string, string> = {
-  // Full question speech phrases
-  'ក... ក ក្តាម': 'Kah... Kah, Kdaam',
-  'ខ... ខ ខ្លា': 'Khah... Khah, Khlaa',
-  'គ... គ គោ': 'Koh... Koh, Ko',
-  'ឃ... ឃ ឃ្មុំ': 'Khoh... Khoh, Khmum',
-  'ច... ច ចេក': 'Chah... Chah, Chek',
-  'ឆ... ឆ ឆ្មា': 'Chhah... Chhah, Chhmaa',
-  'ដ... ដ ដំរី': 'Dah... Dah, Dam-rei',
-  'ស... ស សេះ': 'Sah... Sah, Seh',
-  'ស្រៈ អា... ក អា កា': 'Srah Aah... Kah Aah, Kaa',
-  'ស្រៈ អី... ត្រី': 'Srah Ei... Trei',
-  'ស្រៈ អោ... គ អោ គោ': 'Srah Ao... Koh Ao, Ko',
-  'ស្រៈ អៅ... ប អៅ បៅ': 'Srah Au... Bah Au, Bau',
-  'ឥ... ឥ ឥសី': 'Srah E... Ey-sei',
-  'ឧ... ឧ ឧសភា': 'Srah Oh... U-sa-phea',
-  'ឯ... ឯ ឯកសណ្ឋាន': 'Srah Ae... Ae-ka-san-than',
-  'ឪ... ឪ ឪឡឹក': 'Srah Au... Ouv-loek',
-
-  // Individual consonants & vowels
-  'ក': 'Kah',
-  'ខ': 'Khah',
-  'គ': 'Koh',
-  'ឃ': 'Khoh',
-  'ង': 'Ngoh',
-  'ច': 'Chah',
-  'ឆ': 'Chhah',
-  'ជ': 'Choh',
-  'ឈ': 'Chhoh',
-  'ញ': 'Nhoh',
-  'ដ': 'Dah',
-  'ឋ': 'Thah',
-  'ឌ': 'Doh',
-  'ឍ': 'Thoh',
-  'ណ': 'Nah',
-  'ត': 'Tah',
-  'ថ': 'Thah',
-  'ទ': 'Toh',
-  'ធ': 'Thoh',
-  'ន': 'Noh',
-  'ប': 'Bah',
-  'ផ': 'Phah',
-  'ព': 'Poh',
-  'ភ': 'Phoh',
-  'ម': 'Moh',
-  'យ': 'Yoh',
-  'រ': 'Roh',
-  'ល': 'Loh',
-  'វ': 'Voh',
-  'ស': 'Sah',
-  'ហ': 'Hah',
-  'ឡ': 'Lah',
-  'អ': 'Ah',
-  'ស្រៈ អា': 'Srah Aah',
-  'ា': 'Srah Aah',
-  'ស្រៈ អិ': 'Srah Eh',
-  'ិ': 'Srah Eh',
-  'ស្រៈ អី': 'Srah Ei',
-  'ី': 'Srah Ei',
-  'ស្រៈ អឹ': 'Srah Oe',
-  'ឹ': 'Srah Oe',
-  'ស្រៈ អឺ': 'Srah Oeu',
-  'ឺ': 'Srah Oeu',
-  'ស្រៈ អុ': 'Srah Oh',
-  'ុ': 'Srah Oh',
-  'ស្រៈ អូ': 'Srah Ou',
-  'ូ': 'Srah Ou',
-  'ស្រៈ អេ': 'Srah Ey',
-  'េ': 'Srah Ey',
-  'ស្រៈ អែ': 'Srah Ae',
-  'ែ': 'Srah Ae',
-  'ស្រៈ អោ': 'Srah Ao',
-  'ោ': 'Srah Ao',
-  'ស្រៈ អៅ': 'Srah Au',
-  'ៅ': 'Srah Au',
-  'ស្រៈ អាំ': 'Srah Am',
-  'ាំ': 'Srah Am',
-  'ឥ': 'Srah E',
-  'ឧ': 'Srah Oh',
-  'ឯ': 'Srah Ae',
-  'ឪ': 'Srah Au',
-  'ឱ': 'Srah Ao',
-};
-
-function toKhmerPhoneticSpeech(text: string): string {
-  const trimmed = text.trim();
-  if (KHMER_PHONETIC_MAP[trimmed]) {
-    return KHMER_PHONETIC_MAP[trimmed];
-  }
-  // Character-by-character transliteration fallback for custom teacher questions
-  let result = trimmed;
-  Object.keys(KHMER_PHONETIC_MAP)
-    .sort((a, b) => b.length - a.length)
-    .forEach((khmerKey) => {
-      if (result.includes(khmerKey)) {
-        result = result.split(khmerKey).join(` ${KHMER_PHONETIC_MAP[khmerKey]} `);
-      }
-    });
-  return result.replace(/\s+/g, ' ').trim() || 'Kah';
-}
-
-function getAudioCtx(): AudioContext | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    if (!sharedAudioCtx) {
-      const AudioContextClass =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      if (AudioContextClass) {
-        sharedAudioCtx = new AudioContextClass();
-      }
-    }
-    return sharedAudioCtx;
-  } catch {
-    return null;
-  }
-}
-
-function withUnlockedAudioCtx(callback: (ctx: AudioContext) => void) {
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-
-  try {
-    // Play a 1-sample silent buffer synchronously to unlock iOS/Safari/Chrome audio on click
-    const silentBuffer = ctx.createBuffer(1, 1, 22050);
-    const source = ctx.createBufferSource();
-    source.buffer = silentBuffer;
-    source.connect(ctx.destination);
-    source.start(0);
-  } catch {
-    // Ignore
-  }
-
-  if (ctx.state === 'suspended') {
-    ctx
-      .resume()
-      .then(() => callback(ctx))
-      .catch(() => {});
-  } else {
-    callback(ctx);
-  }
-}
-
-// Unlock AudioContext on first user interaction anywhere in the document
-if (typeof window !== 'undefined') {
-  const unlockOnGesture = () => {
-    withUnlockedAudioCtx(() => {});
-  };
-  window.addEventListener('pointerdown', unlockOnGesture, { once: true, passive: true });
-  window.addEventListener('keydown', unlockOnGesture, { once: true, passive: true });
-}
-
-function playSoundEffect(type: 'correct' | 'tryAgain' | 'tap' | 'speak' | 'victory') {
-  withUnlockedAudioCtx((ctx) => {
-    const now = ctx.currentTime + 0.01;
-
-    const playTone = (
-      freq: number,
-      startTime: number,
-      duration: number,
-      wave: OscillatorType = 'triangle',
-      peakGain = 0.32
-    ) => {
-      const osc = ctx.createOscillator();
-      const subOsc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = wave;
-      osc.frequency.setValueAtTime(freq, startTime);
-
-      subOsc.type = 'sine';
-      subOsc.frequency.setValueAtTime(freq * 2, startTime);
-
-      gain.gain.setValueAtTime(0.001, startTime);
-      gain.gain.linearRampToValueAtTime(peakGain, startTime + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0008, startTime + duration);
-
-      osc.connect(gain);
-      subOsc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(startTime);
-      subOsc.start(startTime);
-      osc.stop(startTime + duration + 0.02);
-      subOsc.stop(startTime + duration + 0.02);
-    };
-
-    if (type === 'correct') {
-      const notes = [523.25, 659.25, 783.99, 1046.5];
-      notes.forEach((freq, idx) => {
-        playTone(freq, now + idx * 0.08, 0.28, 'triangle', 0.35);
-      });
-    } else if (type === 'tryAgain') {
-      const notes = [392.0, 329.63];
-      notes.forEach((freq, idx) => {
-        playTone(freq, now + idx * 0.12, 0.25, 'sine', 0.28);
-      });
-    } else if (type === 'speak') {
-      // Pleasant 2-note marimba chime accompanying voice pronunciation
-      playTone(587.33, now, 0.14, 'triangle', 0.26);
-      playTone(880.0, now + 0.07, 0.18, 'sine', 0.24);
-    } else if (type === 'tap') {
-      playTone(659.25, now, 0.12, 'triangle', 0.28);
-    } else if (type === 'victory') {
-      const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
-      notes.forEach((freq, idx) => {
-        playTone(freq, now + idx * 0.1, 0.34, 'triangle', 0.36);
-      });
-    }
-  });
-}
-
-function speakKhmerText(text: string) {
-  // Always play immediate musical chime so click is 100% audible even before speech starts
-  playSoundEffect('speak');
-
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-
-  const startSpeech = () => {
-    try {
-      const synth = window.speechSynthesis;
-      if (synth.paused) {
-        synth.resume();
-      }
-
-      const voices = synth.getVoices ? synth.getVoices() : [];
-      const khmerVoice = voices.find(
-        (v) =>
-          (v.lang && v.lang.toLowerCase().includes('km')) ||
-          (v.name && v.name.toLowerCase().includes('khmer')) ||
-          (v.name && v.name.toLowerCase().includes('cambodia'))
-      );
-
-      // CRITICAL FIX: If the browser/OS does NOT have a native Khmer (`km-KH`) voice installed,
-      // passing Khmer Unicode script (`ក... ក ក្តាម`) to a default English/system voice produces
-      // 100% silence because non-Latin script is stripped. In that case, we speak the phonetic
-      // Khmer pronunciation (`Kah... Kah, Kdaam`) so the learner always hears clear voice audio!
-      const spokenString = khmerVoice ? text : toKhmerPhoneticSpeech(text);
-      const utterance = new SpeechSynthesisUtterance(spokenString);
-      activeSpeechUtterance = utterance;
-
-      if (khmerVoice) {
-        utterance.voice = khmerVoice;
-        utterance.lang = khmerVoice.lang || 'km-KH';
-        utterance.rate = 0.85;
-        utterance.pitch = 1.08;
-      } else {
-        const preferredFallbackVoice =
-          voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('en') && v.default) ||
-          voices.find((v) => v.lang && v.lang.toLowerCase().startsWith('en')) ||
-          voices[0];
-        if (preferredFallbackVoice) {
-          utterance.voice = preferredFallbackVoice;
-          utterance.lang = preferredFallbackVoice.lang || 'en-US';
-        } else {
-          utterance.lang = 'en-US';
-        }
-        utterance.rate = 0.82;
-        utterance.pitch = 1.05;
-      }
-
-      utterance.volume = 1.0;
-      utterance.onend = () => {
-        if (activeSpeechUtterance === utterance) {
-          activeSpeechUtterance = null;
-        }
-      };
-      utterance.onerror = () => {
-        if (activeSpeechUtterance === utterance) {
-          activeSpeechUtterance = null;
-        }
-      };
-
-      synth.speak(utterance);
-    } catch {
-      // Fallback gracefully
-    }
-  };
-
-  try {
-    if (speechTimeoutId) {
-      clearTimeout(speechTimeoutId);
-      speechTimeoutId = null;
-    }
-    const synth = window.speechSynthesis;
-    // Avoid Chromium bug where synchronous cancel() + speak() cancels the new utterance
-    if (synth.speaking || synth.pending) {
-      synth.cancel();
-      speechTimeoutId = setTimeout(startSpeech, 35);
-    } else {
-      startSpeech();
-    }
-  } catch {
-    // Fallback gracefully
-  }
-}
-
-// ============================================================================
 // MAIN APPLICATION COMPONENT
 // ============================================================================
 
 type MobileOS = 'IOS' | 'ANDROID';
 type StudentSubTab = 'QUIZ' | 'LEARN' | 'PROFILE';
 
+const STUDENT_ALLOWED_ROUTES: RoutePath[] = [
+  '/student',
+  '/mobile-install',
+  '/code',
+];
+
+/**
+ * Resolves any URL path and automatically redirects restricted paths
+ * (`/teacher`, `/admin`, `/login`, `/teacher-dashboard`, `/admin-dashboard`, `/`)
+ * back to the main student page (`/student`).
+ */
+function resolveStudentRoute(rawPath: string): RoutePath {
+  const normalized = rawPath.toLowerCase().trim();
+  if (
+    normalized === '/teacher' ||
+    normalized === '/admin' ||
+    normalized === '/login' ||
+    normalized === '/teacher-dashboard' ||
+    normalized === '/admin-dashboard' ||
+    normalized === '/'
+  ) {
+    return '/student';
+  }
+  if (STUDENT_ALLOWED_ROUTES.includes(normalized as RoutePath)) {
+    return normalized as RoutePath;
+  }
+  return '/student';
+}
+
 export default function App() {
-  // 1. RBAC Mock Database & Session State
-  const [usersDb, setUsersDb] = useState<UserAccount[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.USERS);
-      return saved ? JSON.parse(saved) : INITIAL_USERS_DB;
-    } catch {
-      return INITIAL_USERS_DB;
-    }
-  });
-
-  // Default to the demo Student account if no session is saved yet so the Lesson Selection screen is immediately ready
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.SESSION);
-      return saved ? JSON.parse(saved) : INITIAL_USERS_DB[2];
-    } catch {
-      return INITIAL_USERS_DB[2];
-    }
-  });
-
-  const [lessonsDb, setLessonsDb] = useState<LessonPost[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.LESSONS);
-      return saved ? JSON.parse(saved) : INITIAL_LESSONS_DB;
-    } catch {
-      return INITIAL_LESSONS_DB;
-    }
-  });
-
-  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.AUDIT_LOGS);
-      return saved ? JSON.parse(saved) : INITIAL_AUDIT_LOGS;
-    } catch {
-      return INITIAL_AUDIT_LOGS;
-    }
-  });
-
-  const VALID_ROUTES: RoutePath[] = [
-    '/student',
-    '/teacher',
-    '/admin',
-    '/login',
-    '/mobile-install',
-    '/code',
-  ];
+  // 1. Consume Open-Access Student Context (Always locked to 'student' role)
+  const { currentUser, updateCurrentUserProfile } = useAuth();
 
   const [currentRoute, setCurrentRoute] = useState<RoutePath>(() => {
     if (typeof window !== 'undefined') {
-      const path = window.location.pathname as RoutePath;
-      if (VALID_ROUTES.includes(path)) {
-        return path;
-      }
+      return resolveStudentRoute(window.location.pathname);
     }
     return '/student';
   });
 
+  // Synchronize URL bar & enforce redirect if URL is /teacher, /admin, or /login
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (window.location.pathname !== currentRoute) {
+    const safeRoute = resolveStudentRoute(currentRoute);
+    if (safeRoute !== currentRoute) {
+      setCurrentRoute(safeRoute);
+      return;
+    }
+    if (window.location.pathname !== safeRoute) {
       try {
-        window.history.pushState({}, '', currentRoute);
+        window.history.replaceState({}, '', safeRoute);
       } catch {
         // Ignore in sandboxed contexts
       }
@@ -862,102 +517,28 @@ export default function App() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const handlePopState = () => {
-      const path = window.location.pathname as RoutePath;
-      if (VALID_ROUTES.includes(path)) {
-        setCurrentRoute(path);
-      } else {
-        setCurrentRoute('/student');
+      const safeRoute = resolveStudentRoute(window.location.pathname);
+      setCurrentRoute(safeRoute);
+      if (window.location.pathname !== safeRoute) {
+        try {
+          window.history.replaceState({}, '', safeRoute);
+        } catch {
+          // Ignore
+        }
       }
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Sync DB changes to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(usersDb));
-    } catch {
-      // Ignore
-    }
-  }, [usersDb]);
-
-  useEffect(() => {
-    try {
-      if (currentUser) {
-        localStorage.setItem(STORAGE_KEYS.SESSION, JSON.stringify(currentUser));
-      } else {
-        localStorage.removeItem(STORAGE_KEYS.SESSION);
-      }
-    } catch {
-      // Ignore
-    }
-  }, [currentUser]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.LESSONS, JSON.stringify(lessonsDb));
-    } catch {
-      // Ignore
-    }
-  }, [lessonsDb]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(auditLogs));
-    } catch {
-      // Ignore
-    }
-  }, [auditLogs]);
-
-  const logSecurityEvent = useCallback(
-    (actorEmail: string, actorRole: UserRole, action: string, targetPath: string, outcome: 'ALLOWED' | 'DENIED') => {
-      const now = new Date();
-      const timeStr = now.toTimeString().split(' ')[0];
-      const entry: AuditLogEntry = {
-        id: `log-${Date.now()}`,
-        timestamp: timeStr,
-        actorEmail,
-        actorRole,
-        action,
-        targetPath,
-        outcome,
-      };
-      setAuditLogs((prev) => [entry, ...prev.slice(0, 29)]);
-    },
-    []
-  );
-
-  // 2. Login & Registration Form State
-  const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER'>('LOGIN');
-  const [identifierInput, setIdentifierInput] = useState('admin@school.edu.kh');
-  const [passwordInput, setPasswordInput] = useState('Password123!');
-  const [fullNameInput, setFullNameInput] = useState('');
-  const [registerRoleInput, setRegisterRoleInput] = useState<UserRole>(UserRole.STUDENT);
-  const [showPassword, setShowPassword] = useState(false);
-  const [authError, setAuthError] = useState('');
-  const [authSuccessMsg, setAuthSuccessMsg] = useState('');
-
-  // 3. Admin User Creation State
-  const [newAdminUserEmail, setNewAdminUserEmail] = useState('');
-  const [newAdminUserName, setNewAdminUserName] = useState('');
-  const [newAdminUserRole, setNewAdminUserRole] = useState<UserRole>(UserRole.STUDENT);
-  const [userSearchQuery, setUserSearchQuery] = useState('');
-
-  // 4. Teacher Lesson Editor State
-  const [lessonTitleInput, setLessonTitleInput] = useState('');
-  const [lessonCategoryInput, setLessonCategoryInput] = useState<LessonPost['category']>('Consonants (ព្យញ្ជនៈ)');
-  const [lessonSummaryInput, setLessonSummaryInput] = useState('');
-  const [editingLessonId, setEditingLessonId] = useState<string | null>(null);
-
-  // 5. Student Portal & Lesson-Based Quiz Selection State
+  // 2. Student Portal & Lesson-Based Quiz Selection State
   const [studentSubTab, setStudentSubTab] = useState<StudentSubTab>('QUIZ');
   // `selectedLessonId === null` means the user is on the Lesson Selection Screen (ការជ្រើសរើសកម្រងសំណួរតាមមេរៀន)
   const [selectedLessonId, setSelectedLessonId] = useState<LessonId | 'ALL' | null>(null);
   const [profileNameEdit, setProfileNameEdit] = useState('');
   const [profileSavedToast, setProfileSavedToast] = useState(false);
   const [selectedOS, setSelectedOS] = useState<MobileOS>('IOS');
-  const [questions, setQuestions] = useState<QuizQuestion[]>(INITIAL_QUIZ_DATA);
+  const [questions] = useState<QuizQuestion[]>(INITIAL_QUIZ_DATA);
 
   const isOnline = useOnlineStatus();
 
@@ -970,27 +551,18 @@ export default function App() {
   const [isQuizFinished, setIsQuizFinished] = useState<boolean>(false);
   const [isTransitioning, setIsTransitioning] = useState<boolean>(false);
   const [lastSpokenToast, setLastSpokenToast] = useState<string>('');
-  const [lessonBestScores, setLessonBestScores] = useState<Record<string, number>>(() => {
-    try {
-      const saved = localStorage.getItem('khmer_quiz_lesson_best_v1');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
+  const [lessonBestScores, setLessonBestScores] = useState<Record<string, number>>(() =>
+    safeLoadFromStorage<Record<string, number>>(
+      'khmer_quiz_lesson_best_v1',
+      {},
+      (val): val is Record<string, number> =>
+        typeof val === 'object' && val !== null && !Array.isArray(val)
+    )
+  );
 
   // Code & URL Copy States
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedUrl, setCopiedUrl] = useState<boolean>(false);
-
-  // Teacher New Question Form State (Tagged by `lessonId`)
-  const [newQIcon, setNewQIcon] = useState('🐢');
-  const [newQLessonId, setNewQLessonId] = useState<LessonId>('lesson-2');
-  const [newQWordKhmer, setNewQWordKhmer] = useState('អណ្តើក');
-  const [newQWordEng, setNewQWordEng] = useState('Turtle (Andaek)');
-  const [newQCorrect, setNewQCorrect] = useState('អ');
-  const [newQWrong1, setNewQWrong1] = useState('ក');
-  const [newQWrong2, setNewQWrong2] = useState('ស');
 
   /**
    * DYNAMIC QUESTION FILTERING BY `lessonId`
@@ -1021,275 +593,14 @@ export default function App() {
     setLastSpokenToast(displayLabel || text);
   }, []);
 
-  // ==========================================================================
-  // AUTHENTICATION & ROUTE MIDDLEWARE HANDLERS
-  // ==========================================================================
-
-  const navigateToRoute = (targetRoute: RoutePath) => {
-    if (targetRoute === '/login') {
-      setCurrentRoute('/login');
-      return;
-    }
-
-    if (!currentUser) {
-      setCurrentRoute('/login');
-      return;
-    }
-
-    const allowedRoles = ROUTE_PERMISSIONS[targetRoute];
-    const isAuthorized = allowedRoles.includes(currentUser.role);
-
-    logSecurityEvent(
-      currentUser.email,
-      currentUser.role,
-      isAuthorized
-        ? `Navigated to authorized route ${targetRoute}`
-        : `Blocked unauthorized attempt to access ${targetRoute}`,
-      targetRoute,
-      isAuthorized ? 'ALLOWED' : 'DENIED'
-    );
-
-    setCurrentRoute(targetRoute);
-  };
-
-  const handleAuthSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError('');
-    setAuthSuccessMsg('');
-
-    const trimmedId = identifierInput.trim();
-    const trimmedPass = passwordInput.trim();
-
-    if (!trimmedId) {
-      setAuthError('សូមបញ្ចូលអ៊ីមែល ឬឈ្មោះគណនី (Email or Username is required).');
-      return;
-    }
-    if (!trimmedPass) {
-      setAuthError('សូមបញ្ចូលពាក្យសម្ងាត់ (Password is required).');
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if ((authMode === 'REGISTER' || trimmedId.includes('@')) && !emailRegex.test(trimmedId)) {
-      setAuthError('ទម្រង់អ៊ីមែលមិនត្រឹមត្រូវទេ — សូមបញ្ចូលអ៊ីមែលដូចជា name@school.edu.kh (Invalid email format).');
-      return;
-    }
-
-    if (trimmedPass.length < 6) {
-      setAuthError('ពាក្យសម្ងាត់ត្រូវមានយ៉ាងតិច ៦ តួអក្សរ (Password must be at least 6 characters).');
-      return;
-    }
-
-    if (authMode === 'LOGIN') {
-      const matchedUser = usersDb.find(
-        (u) =>
-          (u.email.toLowerCase() === trimmedId.toLowerCase() ||
-            u.username.toLowerCase() === trimmedId.toLowerCase()) &&
-          u.password === trimmedPass
-      );
-
-      if (!matchedUser) {
-        setAuthError('អ៊ីមែល/ឈ្មោះគណនី ឬពាក្យសម្ងាត់មិនត្រឹមត្រូវទេ (Invalid credentials. Try the 1-Click Demo Role buttons!).');
-        playSoundEffect('tryAgain');
-        return;
-      }
-
-      if (matchedUser.status === 'Suspended') {
-        setAuthError('គណនីនេះត្រូវបានផ្អាកជាបណ្តោះអាសន្នដោយ Admin (This account is currently suspended).');
-        playSoundEffect('tryAgain');
-        return;
-      }
-
-      setCurrentUser(matchedUser);
-      const targetRoute = ROLE_DEFAULT_ROUTE[matchedUser.role];
-      setCurrentRoute(targetRoute);
-      logSecurityEvent(
-        matchedUser.email,
-        matchedUser.role,
-        `Signed in & redirected to ${targetRoute}`,
-        targetRoute,
-        'ALLOWED'
-      );
-      playSoundEffect('correct');
-    } else {
-      if (!fullNameInput.trim()) {
-        setAuthError('សូមបញ្ចូលឈ្មោះពេញរបស់អ្នក (Full Name is required for registration).');
-        return;
-      }
-
-      const exists = usersDb.some(
-        (u) => u.email.toLowerCase() === trimmedId.toLowerCase() || u.username.toLowerCase() === trimmedId.toLowerCase()
-      );
-      if (exists) {
-        setAuthError('អ៊ីមែលនេះមានក្នុងប្រព័ន្ធរួចហើយ (An account with this email already exists).');
-        return;
-      }
-
-      const newUser: UserAccount = {
-        id: `usr-${Date.now()}`,
-        username: trimmedId.split('@')[0].toLowerCase(),
-        email: trimmedId.toLowerCase(),
-        password: trimmedPass,
-        fullName: fullNameInput.trim(),
-        role: registerRoleInput,
-        status: 'Active',
-        starsEarned: 0,
-        quizzesCompleted: 0,
-        createdAt: new Date().toISOString().split('T')[0],
-      };
-
-      setUsersDb((prev) => [...prev, newUser]);
-      setCurrentUser(newUser);
-      const targetRoute = ROLE_DEFAULT_ROUTE[newUser.role];
-      setCurrentRoute(targetRoute);
-      logSecurityEvent(
-        newUser.email,
-        newUser.role,
-        `Registered new ${newUser.role} account & redirected to ${targetRoute}`,
-        targetRoute,
-        'ALLOWED'
-      );
-      playSoundEffect('correct');
-    }
-  };
-
-  const handleQuickDemoLogin = (role: UserRole) => {
-    setAuthError('');
-    const demoUser =
-      usersDb.find((u) => u.role === role && u.status === 'Active') ||
-      INITIAL_USERS_DB.find((u) => u.role === role)!;
-    setIdentifierInput(demoUser.email);
-    setPasswordInput(demoUser.password);
-    setCurrentUser(demoUser);
-    const targetRoute = ROLE_DEFAULT_ROUTE[demoUser.role];
-    setCurrentRoute(targetRoute);
-    logSecurityEvent(
-      demoUser.email,
-      demoUser.role,
-      `Quick role switch login (${demoUser.role}) -> ${targetRoute}`,
-      targetRoute,
-      'ALLOWED'
-    );
-    playSoundEffect('tap');
-  };
-
-  const handleLogout = () => {
-    if (currentUser) {
-      logSecurityEvent(
-        currentUser.email,
-        currentUser.role,
-        'User logged out & cleared session',
-        '/login',
-        'ALLOWED'
-      );
-    }
-    setCurrentUser(null);
-    setCurrentRoute('/login');
-    setAuthError('');
-    setAuthSuccessMsg('អ្នកបានចាកចេញពីគណនីដោយជោគជ័យ (Session cleared & logged out).');
-    playSoundEffect('tap');
-  };
-
-  // ==========================================================================
-  // ADMIN & TEACHER HANDLERS
-  // ==========================================================================
-
-  const handleChangeUserRole = (userId: string, newRole: UserRole) => {
-    setUsersDb((prev) => prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u)));
-    if (currentUser && currentUser.id === userId) {
-      setCurrentUser((prev) => (prev ? { ...prev, role: newRole } : null));
-    }
-  };
-
-  const handleToggleUserStatus = (userId: string) => {
-    setUsersDb((prev) =>
-      prev.map((u) =>
-        u.id === userId ? { ...u, status: u.status === 'Active' ? 'Suspended' : 'Active' } : u
-      )
-    );
-  };
-
-  const handleDeleteUser = (userId: string) => {
-    if (currentUser && currentUser.id === userId) return;
-    setUsersDb((prev) => prev.filter((u) => u.id !== userId));
-  };
-
-  const handleCreateUserByAdmin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAdminUserEmail.trim() || !newAdminUserName.trim()) return;
-    const created: UserAccount = {
-      id: `usr-${Date.now()}`,
-      username: newAdminUserEmail.trim().split('@')[0].toLowerCase(),
-      email: newAdminUserEmail.trim().toLowerCase(),
-      password: 'Password123!',
-      fullName: newAdminUserName.trim(),
-      role: newAdminUserRole,
-      status: 'Active',
-      starsEarned: 0,
-      quizzesCompleted: 0,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-    setUsersDb((prev) => [created, ...prev]);
-    setNewAdminUserEmail('');
-    setNewAdminUserName('');
-  };
-
-  const handleSaveLesson = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!lessonTitleInput.trim() || !lessonSummaryInput.trim()) return;
-
-    if (editingLessonId) {
-      setLessonsDb((prev) =>
-        prev.map((item) =>
-          item.id === editingLessonId
-            ? {
-                ...item,
-                title: lessonTitleInput.trim(),
-                category: lessonCategoryInput,
-                summary: lessonSummaryInput.trim(),
-                updatedAt: new Date().toISOString().split('T')[0],
-              }
-            : item
-        )
-      );
-      setEditingLessonId(null);
-    } else {
-      const newLesson: LessonPost = {
-        id: `les-${Date.now()}`,
-        title: lessonTitleInput.trim(),
-        category: lessonCategoryInput,
-        summary: lessonSummaryInput.trim(),
-        authorName: currentUser?.fullName || 'Teacher',
-        updatedAt: new Date().toISOString().split('T')[0],
-        status: 'Published',
-      };
-      setLessonsDb((prev) => [newLesson, ...prev]);
-    }
-
-    setLessonTitleInput('');
-    setLessonSummaryInput('');
-  };
-
-  const handleEditLessonClick = (lesson: LessonPost) => {
-    setEditingLessonId(lesson.id);
-    setLessonTitleInput(lesson.title);
-    setLessonCategoryInput(lesson.category);
-    setLessonSummaryInput(lesson.summary);
-  };
-
-  const handleToggleLessonStatus = (lessonId: string) => {
-    setLessonsDb((prev) =>
-      prev.map((l) =>
-        l.id === lessonId
-          ? { ...l, status: l.status === 'Published' ? 'Draft' : 'Published' }
-          : l
-      )
-    );
-  };
-
-  const handleDeleteLesson = (lessonId: string) => {
-    setLessonsDb((prev) => prev.filter((l) => l.id !== lessonId));
-  };
+  /**
+   * Student-Locked Navigation Handler
+   * Any attempt to navigate to `/teacher`, `/admin`, or `/login` is automatically redirected to `/student`.
+   */
+  const navigateToRoute = useCallback((targetRoute: RoutePath) => {
+    const safeDestination = resolveStudentRoute(targetRoute);
+    setCurrentRoute(safeDestination);
+  }, []);
 
   // ==========================================================================
   // LESSON SELECTION & QUIZ FLOW HANDLERS
@@ -1297,13 +608,7 @@ export default function App() {
 
   // Start a specific lesson quiz (`lesson-1`, `lesson-2`, `lesson-3`, `lesson-4`, or `ALL`)
   const handleStartLessonQuiz = (lessonId: LessonId | 'ALL') => {
-    try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    } catch {
-      // Ignore
-    }
+    cancelActiveSpeech();
     setSelectedLessonId(lessonId);
     setCurrentIndex(0);
     setScore(0);
@@ -1318,13 +623,7 @@ export default function App() {
 
   // Return to the Lesson Selection Screen ("ត្រឡប់ក្រោយ / Back to Lessons")
   const handleBackToLessonSelection = () => {
-    try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    } catch {
-      // Ignore
-    }
+    cancelActiveSpeech();
     setSelectedLessonId(null);
     setCurrentIndex(0);
     setScore(0);
@@ -1387,29 +686,16 @@ export default function App() {
       }
 
       if (currentUser) {
-        const updatedStars = currentUser.starsEarned + score;
-        const updatedQuizzes = currentUser.quizzesCompleted + 1;
-        const updatedUser: UserAccount = {
-          ...currentUser,
-          starsEarned: updatedStars,
-          quizzesCompleted: updatedQuizzes,
-        };
-        setCurrentUser(updatedUser);
-        setUsersDb((prev) =>
-          prev.map((u) => (u.id === currentUser.id ? updatedUser : u))
-        );
+        updateCurrentUserProfile({
+          starsEarned: currentUser.starsEarned + score,
+          quizzesCompleted: currentUser.quizzesCompleted + 1,
+        });
       }
     }
   };
 
   const handleRestartCurrentLesson = () => {
-    try {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-      }
-    } catch {
-      // Ignore
-    }
+    cancelActiveSpeech();
     setCurrentIndex(0);
     setScore(0);
     setSelectedLetter(null);
@@ -1424,12 +710,9 @@ export default function App() {
   const handleUpdateStudentProfile = (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser || !profileNameEdit.trim()) return;
-    const updated: UserAccount = {
-      ...currentUser,
+    updateCurrentUserProfile({
       fullName: profileNameEdit.trim(),
-    };
-    setCurrentUser(updated);
-    setUsersDb((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+    });
     setProfileSavedToast(true);
     setTimeout(() => setProfileSavedToast(false), 2500);
   };
@@ -1494,121 +777,10 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleAddCustomQuestion = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newQWordKhmer.trim() || !newQCorrect.trim()) return;
-
-    const targetLesson = QUIZ_LESSONS.find((l) => l.id === newQLessonId) || QUIZ_LESSONS[0];
-
-    const newQuestion: QuizQuestion = {
-      id: Date.now(),
-      lessonId: newQLessonId,
-      categoryLabel: `${targetLesson.numberLabel} · ${targetLesson.titleKhmer}`,
-      icon: newQIcon || '⭐',
-      clueWordKhmer: newQWordKhmer.trim(),
-      clueWordEnglish: newQWordEng.trim() || newQWordKhmer.trim(),
-      phoneticHint: `សំឡេងអាន៖ «${newQCorrect.trim()}» — ${newQWordKhmer.trim()}`,
-      speechText: `${newQCorrect.trim()}... ${newQWordKhmer.trim()}`,
-      questionKhmer: `តើពាក្យ «${newQWordKhmer.trim()}» ប្រើតួអក្សរមួយណា?`,
-      questionEnglish: `Which Khmer letter belongs to "${newQWordEng.trim()}"?`,
-      options: [
-        { letter: newQCorrect.trim(), label: `${newQCorrect.trim()}`, speech: newQCorrect.trim() },
-        { letter: newQWrong1.trim() || 'ខ', label: `${newQWrong1.trim() || 'ខ'}`, speech: newQWrong1.trim() || 'ខ' },
-        { letter: newQWrong2.trim() || 'គ', label: `${newQWrong2.trim() || 'គ'}`, speech: newQWrong2.trim() || 'គ' },
-      ],
-      correctLetter: newQCorrect.trim(),
-      explanation: `ត្រឹមត្រូវ! «${newQCorrect.trim()}» គឺសម្រាប់ពាក្យ ${newQWordKhmer.trim()}!`,
-    };
-
-    setQuestions((prev) => [...prev, newQuestion]);
-    setNewQWordKhmer('');
-    setNewQWordEng('');
-  };
-
-  // ==========================================================================
-  // PROTECTED ROUTE AUTHORIZATION GUARD RENDERER
-  // ==========================================================================
-
-  const renderProtectedRoute = (
-    route: Exclude<RoutePath, '/login'>,
-    content: React.ReactNode
-  ) => {
-    if (!currentUser) {
-      return (
-        <div className="max-w-lg mx-auto my-12 bg-white rounded-3xl border border-slate-200 p-8 text-center shadow-sm">
-          <Lock className="w-12 h-12 text-amber-500 mx-auto mb-3" />
-          <h2 className="text-xl font-bold text-slate-900 mb-2">
-            តម្រូវឱ្យចូលគណនីជាមុនសិន (Authentication Required)
-          </h2>
-          <p className="text-sm text-slate-600 mb-6">
-            You must be logged in to access <code className="font-mono font-bold">{route}</code>.
-          </p>
-          <button
-            type="button"
-            onClick={() => setCurrentRoute('/login')}
-            className="px-6 py-3 rounded-xl bg-slate-900 text-white font-bold text-sm cursor-pointer"
-          >
-            ទៅកាន់ទំព័រចូលគណនី (Go to Login)
-          </button>
-        </div>
-      );
-    }
-
-    const allowedRoles = ROUTE_PERMISSIONS[route];
-    const hasPermission = allowedRoles.includes(currentUser.role);
-
-    if (!hasPermission) {
-      return (
-        <section className="max-w-2xl mx-auto my-8 bg-white rounded-3xl border-2 border-rose-300 p-8 sm:p-10 text-center shadow-sm animate-pop">
-          <div className="w-16 h-16 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-4">
-            <ShieldAlert className="w-9 h-9" />
-          </div>
-          <p className="text-xs font-mono font-bold text-rose-600 mb-1">
-            HTTP 403 FORBIDDEN · RBAC MIDDLEWARE INTERCEPTED
-          </p>
-          <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">
-            មិនអនុញ្ញាតឱ្យចូលប្រើប្រាស់ (Access Denied)
-          </h2>
-          <p className="text-sm sm:text-base text-slate-600 max-w-lg mx-auto mb-6">
-            Your current account (<strong>{currentUser.fullName}</strong>) has the role{' '}
-            <strong className="text-slate-900 font-mono">{currentUser.role}</strong>, which is not authorized to access the protected route{' '}
-            <code className="font-mono font-bold text-rose-700">{route}</code>.
-          </p>
-
-          <div className="bg-slate-50 rounded-2xl border border-slate-200 p-4 max-w-md mx-auto mb-6 text-left text-xs font-mono space-y-1.5 text-slate-700">
-            <div>Attempted Path: {route}</div>
-            <div>Current User Role: {currentUser.role}</div>
-            <div>Required Role(s): {allowedRoles.join(' or ')}</div>
-            <div>Security Action: Logged DENIED event to Admin Audit Log</div>
-          </div>
-
-          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => setCurrentRoute(ROLE_DEFAULT_ROUTE[currentUser.role])}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm cursor-pointer"
-            >
-              ត្រឡប់ទៅផ្ទាំងគ្រប់គ្រងរបស់អ្នក ({ROLE_DEFAULT_ROUTE[currentUser.role]})
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin(allowedRoles[0])}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-bold text-sm cursor-pointer"
-            >
-              ប្តូរទៅគណនី {allowedRoles[0]} ដើម្បីសាកល្បង (Switch Role)
-            </button>
-          </div>
-        </section>
-      );
-    }
-
-    return content;
-  };
-
   return (
     <div className="min-h-screen flex flex-col justify-between bg-[#FFFDF7] text-slate-900 font-khmer selection:bg-amber-200">
       {/* =====================================================================
-          TOP NAVIGATION BAR (Strict 3-Zone Contract)
+          STUDENT-ONLY TOP NAVIGATION BAR (Teacher & Admin Menus Hidden)
           ===================================================================== */}
       <header className="w-full bg-white/95 border-b border-amber-200/80 sticky top-0 z-30 px-4 sm:px-8 py-3.5">
         <div className="max-w-6xl mx-auto flex items-center justify-between gap-8">
@@ -1625,7 +797,7 @@ export default function App() {
             🐘 រៀនអក្សរខ្មែរថ្នាក់ទី១
           </a>
 
-          {/* Zone 2: 5 Concise Single-Line Route Links */}
+          {/* Zone 2: Student-Only Navigation Links (No /teacher or /admin links) */}
           <nav className="hidden md:flex items-center gap-6 text-sm font-bold text-slate-600">
             <button
               type="button"
@@ -1641,28 +813,7 @@ export default function App() {
             >
               មេរៀនសិស្ស (/student)
             </button>
-            <button
-              type="button"
-              onClick={() => navigateToRoute('/teacher')}
-              className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
-                currentRoute === '/teacher'
-                  ? 'border-amber-500 text-slate-900'
-                  : 'border-transparent hover:text-slate-900'
-              }`}
-            >
-              គ្រូបង្រៀន (/teacher)
-            </button>
-            <button
-              type="button"
-              onClick={() => navigateToRoute('/admin')}
-              className={`whitespace-nowrap shrink-0 py-1 border-b-2 transition-colors cursor-pointer ${
-                currentRoute === '/admin'
-                  ? 'border-amber-500 text-slate-900'
-                  : 'border-transparent hover:text-slate-900'
-              }`}
-            >
-              អ្នកគ្រប់គ្រង (/admin)
-            </button>
+
             <button
               type="button"
               onClick={() => navigateToRoute('/mobile-install')}
@@ -1674,6 +825,7 @@ export default function App() {
             >
               ដំឡើង iOS &amp; Android
             </button>
+
             <button
               type="button"
               onClick={() => navigateToRoute('/code')}
@@ -1687,105 +839,37 @@ export default function App() {
             </button>
           </nav>
 
-          {/* Zone 3: 1 Primary Action Button (Logout or Sign In) */}
+          {/* Zone 3: Student Star Reward Badge (Open-Access Mode, No Login Required) */}
           <div className="flex items-center shrink-0">
-            {currentUser ? (
-              <button
-                type="button"
-                onClick={handleLogout}
-                className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <LogOut className="w-4 h-4 shrink-0" />
-                <span>ចាកចេញ (Logout)</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setCurrentRoute('/login')}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <UserCheck className="w-4 h-4 shrink-0" />
-                <span>ចូលគណនី (Sign In)</span>
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedLessonId(null);
+                setStudentSubTab('QUIZ');
+                navigateToRoute('/student');
+              }}
+              className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs sm:text-sm font-bold transition-colors flex items-center gap-2 whitespace-nowrap shrink-0 cursor-pointer shadow-[0_3px_0_#b45309]"
+            >
+              <Star className="w-4 h-4 fill-slate-950 text-slate-950 shrink-0" />
+              <span>ផ្កាយរបស់កូន៖ {toKhmerNumeral(currentUser?.starsEarned ?? 0)}</span>
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Active Session & Quick Role Switcher Bar */}
-      <div className="w-full bg-amber-50/90 border-b border-amber-200/70 px-4 sm:px-8 py-2.5">
-        <div className="max-w-6xl mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-700">
-          <div className="flex items-center gap-2 flex-wrap">
-            {currentUser ? (
-              <>
-                <span className="font-bold text-slate-900">
-                  គណនីកំពុងប្រើ៖ {currentUser.fullName}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono font-bold text-emerald-800">
-                  Role: {currentUser.role}
-                </span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono text-slate-500">
-                  Route: {currentRoute}
-                </span>
-              </>
-            ) : (
-              <span className="font-semibold text-slate-600">
-                មិនទាន់ចូលគណនី (Unauthenticated Guest) · សូមជ្រើសរើសតួនាទីខាងស្តាំដើម្បីសាកល្បង RBAC
-              </span>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-slate-500 font-semibold">ប្តូរតួនាទី (Switch Role):</span>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin(UserRole.STUDENT)}
-              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-colors ${
-                currentUser?.role === UserRole.STUDENT
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              Student
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin(UserRole.TEACHER)}
-              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-colors ${
-                currentUser?.role === UserRole.TEACHER
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              Teacher
-            </button>
-            <button
-              type="button"
-              onClick={() => handleQuickDemoLogin(UserRole.ADMIN)}
-              className={`px-2.5 py-1 rounded-md font-bold cursor-pointer transition-colors ${
-                currentUser?.role === UserRole.ADMIN
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              Admin
-            </button>
-          </div>
-        </div>
-      </div>
-
       {/* =====================================================================
-          MAIN WORKSPACE VIEWPORT
+          MAIN WORKSPACE VIEWPORT (Exclusively Student-Facing)
           ===================================================================== */}
       <main className="flex-1 w-full max-w-6xl mx-auto px-4 sm:px-8 py-6 sm:py-8">
         {/* ===================================================================
             ROUTE 1: STUDENT DASHBOARD & LESSON-BASED QUIZ SELECTION (/student)
             =================================================================== */}
-        {currentRoute === '/student' &&
-          renderProtectedRoute(
-            '/student',
+        {currentRoute === '/student' && (
+          <ProtectedRoute
+            routePath="/student"
+            allowedRoles={['student']}
+            onNavigate={navigateToRoute}
+          >
             <div className="space-y-6">
               {/* Student Sub-Navigation & Personal Progress Strip */}
               <div className="bg-white rounded-3xl border border-amber-200/90 p-5 sm:p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -2404,647 +1488,11 @@ export default function App() {
                 </div>
               )}
             </div>
-          )}
-
-        {/* ===================================================================
-            ROUTE 2: LOGIN & REGISTRATION PAGE (/login)
-            =================================================================== */}
-        {currentRoute === '/login' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-stretch">
-            <div className="lg:col-span-6 bg-white rounded-3xl border border-slate-200 p-6 sm:p-10 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="inline-flex items-center gap-1 p-1 bg-slate-100 rounded-xl mb-6">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('LOGIN');
-                      setAuthError('');
-                    }}
-                    className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
-                      authMode === 'LOGIN'
-                        ? 'bg-white text-slate-900 shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    ចូលគណនី (Sign In)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAuthMode('REGISTER');
-                      setIdentifierInput('');
-                      setPasswordInput('');
-                      setAuthError('');
-                    }}
-                    className={`px-4 py-2 rounded-lg text-xs sm:text-sm font-bold transition-colors cursor-pointer ${
-                      authMode === 'REGISTER'
-                        ? 'bg-white text-slate-900 shadow-sm'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    ចុះឈ្មោះគណនីថ្មី (Register)
-                  </button>
-                </div>
-
-                <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2">
-                  {authMode === 'LOGIN'
-                    ? 'ចូលប្រើប្រាស់ប្រព័ន្ធ (Sign In to Portal)'
-                    : 'បង្កើតគណនីថ្មី (Create RBAC Account)'}
-                </h1>
-                <p className="text-sm text-slate-600 mb-6">
-                  {authMode === 'LOGIN'
-                    ? 'Enter your email or username and password. You will be automatically redirected to your role-specific dashboard.'
-                    : 'Register a new user and assign a role (Admin, Teacher/Editor, or Student) to test role-based permissions.'}
-                </p>
-
-                {authError && (
-                  <div className="mb-5 rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs sm:text-sm font-semibold text-rose-800 flex items-start gap-2.5">
-                    <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                    <span>{authError}</span>
-                  </div>
-                )}
-
-                {authSuccessMsg && (
-                  <div className="mb-5 rounded-2xl border border-emerald-300 bg-emerald-50 p-4 text-xs sm:text-sm font-semibold text-emerald-800 flex items-start gap-2.5">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
-                    <span>{authSuccessMsg}</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleAuthSubmit} className="space-y-4" noValidate>
-                  {authMode === 'REGISTER' && (
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                        ឈ្មោះពេញ (Full Name)
-                      </label>
-                      <div className="relative">
-                        <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                        <input
-                          type="text"
-                          value={fullNameInput}
-                          onChange={(e) => setFullNameInput(e.target.value)}
-                          placeholder="e.g. Vanna Sok"
-                          className="w-full rounded-xl border border-slate-300 pl-10 pr-4 py-2.5 text-sm focus:border-slate-900 focus:outline-none"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      អ៊ីមែល ឬ ឈ្មោះគណនី (Email or Username)
-                    </label>
-                    <div className="relative">
-                      <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                      <input
-                        type="text"
-                        value={identifierInput}
-                        onChange={(e) => setIdentifierInput(e.target.value)}
-                        placeholder="admin@school.edu.kh or admin"
-                        className="w-full rounded-xl border border-slate-300 pl-10 pr-4 py-2.5 text-sm focus:border-slate-900 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      ពាក្យសម្ងាត់ (Password)
-                    </label>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        value={passwordInput}
-                        onChange={(e) => setPasswordInput(e.target.value)}
-                        placeholder="Enter password (min 6 chars)"
-                        className="w-full rounded-xl border border-slate-300 pl-10 pr-11 py-2.5 text-sm focus:border-slate-900 focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword((prev) => !prev)}
-                        aria-label={showPassword ? 'Hide password' : 'Show password'}
-                        className="absolute right-3 top-2.5 p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {authMode === 'REGISTER' && (
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                        ជ្រើសរើសតួនាទី (Select RBAC Role)
-                      </label>
-                      <select
-                        value={registerRoleInput}
-                        onChange={(e) => setRegisterRoleInput(e.target.value as UserRole)}
-                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm font-semibold bg-white"
-                      >
-                        <option value={UserRole.STUDENT}>STUDENT — Student Dashboard &amp; Quiz Only</option>
-                        <option value={UserRole.TEACHER}>TEACHER — Content &amp; Lesson Management</option>
-                        <option value={UserRole.ADMIN}>ADMIN — Full System &amp; User Management</option>
-                      </select>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    className="w-full py-3.5 px-5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-sm transition-colors cursor-pointer"
-                  >
-                    {authMode === 'LOGIN'
-                      ? 'ចូលគណនី និងបញ្ជូនទៅផ្ទាំងគ្រប់គ្រង (Sign In)'
-                      : 'បង្កើតគណនី និងចូលប្រើប្រាស់ (Create Account)'}
-                  </button>
-                </form>
-              </div>
-
-              <div className="mt-6 pt-5 border-t border-slate-200 text-xs text-slate-500">
-                ប្រព័ន្ធផ្ទៀងផ្ទាត់សិទ្ធិប្រើប្រាស់ · Session persisted in <code className="font-mono">localStorage</code>.
-              </div>
-            </div>
-
-            <div className="lg:col-span-6 bg-white rounded-3xl border border-slate-200 p-6 sm:p-10 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center gap-2 text-emerald-700 text-xs font-bold mb-2">
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>Interactive Role Testing &amp; Access Matrix</span>
-                </div>
-                <h2 className="text-xl sm:text-2xl font-bold text-slate-900 mb-2">
-                  គណនីគំរូទាំង ៣ តួនាទី (1-Click Demo Role Login)
-                </h2>
-                <p className="text-sm text-slate-600 mb-6">
-                  Click any card below to automatically fill credentials, sign in, and redirect to that role&apos;s default dashboard:
-                </p>
-
-                <div className="space-y-3.5 mb-8">
-                  <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <p className="font-bold text-slate-900 text-sm">
-                        01. Admin Role (<span className="font-mono text-xs">ADMIN</span>)
-                      </p>
-                      <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                        Email: admin@school.edu.kh · Pass: Password123!
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoLogin(UserRole.ADMIN)}
-                      className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      Login as Admin &rarr;
-                    </button>
-                  </div>
-
-                  <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <p className="font-bold text-slate-900 text-sm">
-                        02. Editor / Teacher Role (<span className="font-mono text-xs">TEACHER</span>)
-                      </p>
-                      <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                        Email: teacher@school.edu.kh · Pass: Password123!
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoLogin(UserRole.TEACHER)}
-                      className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      Login as Teacher &rarr;
-                    </button>
-                  </div>
-
-                  <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50/70 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div>
-                      <p className="font-bold text-slate-900 text-sm">
-                        03. Student / Regular User (<span className="font-mono text-xs">STUDENT</span>)
-                      </p>
-                      <p className="text-xs text-slate-600 mt-0.5 font-mono">
-                        Email: student@school.edu.kh · Pass: Password123!
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleQuickDemoLogin(UserRole.STUDENT)}
-                      className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      Login as Student &rarr;
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-amber-50/80 border border-amber-200/80 text-xs text-slate-700 leading-relaxed">
-                <strong>របៀបសាកល្បង Route Protection:</strong> ចុច <strong>Login as Student</strong> រួចសាកល្បងចុចលើម៉ឺនុយ <strong>អ្នកគ្រប់គ្រង (/admin)</strong> នោះប្រព័ន្ធនឹងបង្ហាញផ្ទាំងការពារ <strong>403 Access Denied</strong> ភ្លាម!
-              </div>
-            </div>
-          </div>
+          </ProtectedRoute>
         )}
 
         {/* ===================================================================
-            ROUTE 3: ADMIN DASHBOARD (/admin — ADMIN ONLY)
-            =================================================================== */}
-        {currentRoute === '/admin' &&
-          renderProtectedRoute(
-            '/admin',
-            <div className="space-y-8">
-              <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
-                  <div>
-                    <p className="text-xs font-mono font-bold text-emerald-700">
-                      PROTECTED ROUTE: /admin · REQUIRED ROLE: ADMIN
-                    </p>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
-                      ផ្ទាំងគ្រប់គ្រងប្រព័ន្ធ (Admin Console &amp; User Management)
-                    </h1>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => navigateToRoute('/teacher')}
-                      className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 text-xs font-bold whitespace-nowrap cursor-pointer"
-                    >
-                      មើលផ្ទាំងគ្រូបង្រៀន (/teacher)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => navigateToRoute('/student')}
-                      className="px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-bold whitespace-nowrap cursor-pointer"
-                    >
-                      មើលមេរៀនសិស្ស (/student)
-                    </button>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-6 pt-6 tabular-nums">
-                  <div>
-                    <p className="text-xs font-bold text-slate-500">គណនីសរុប (Total Users)</p>
-                    <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">
-                      {usersDb.length}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500">សំណួរតាមមេរៀន (Total Questions)</p>
-                    <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 mt-1">
-                      {questions.length}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500">ផ្កាយសិស្សសរុប (Total Stars)</p>
-                    <p className="text-2xl sm:text-3xl font-extrabold text-amber-600 mt-1">
-                      ⭐ {usersDb.reduce((acc, u) => acc + u.starsEarned, 0)}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-500">ការព្យាយាមចូលខុសសិទ្ធិ (Blocked 403s)</p>
-                    <p className="text-2xl sm:text-3xl font-extrabold text-rose-600 mt-1">
-                      {auditLogs.filter((l) => l.outcome === 'DENIED').length}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                <div className="lg:col-span-8 bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-                    <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                      <Users className="w-5 h-5 text-slate-700" />
-                      <span>គ្រប់គ្រងអ្នកប្រើប្រាស់ និងតួនាទី (User &amp; Role Management)</span>
-                    </h2>
-                    <input
-                      type="text"
-                      value={userSearchQuery}
-                      onChange={(e) => setUserSearchQuery(e.target.value)}
-                      placeholder="ស្វែងរកឈ្មោះ ឬ អ៊ីមែល..."
-                      className="rounded-xl border border-slate-300 px-3.5 py-2 text-xs focus:border-slate-900 focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-xs sm:text-sm tabular-nums">
-                      <thead>
-                        <tr className="border-b border-slate-200 text-slate-500 font-bold">
-                          <th className="py-3 pr-4">User / Email</th>
-                          <th className="py-3 px-3">RBAC Role</th>
-                          <th className="py-3 px-3">Status</th>
-                          <th className="py-3 px-3 text-right">Quiz Report</th>
-                          <th className="py-3 pl-3 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200/70">
-                        {usersDb
-                          .filter(
-                            (u) =>
-                              u.fullName.toLowerCase().includes(userSearchQuery.toLowerCase()) ||
-                              u.email.toLowerCase().includes(userSearchQuery.toLowerCase())
-                          )
-                          .map((u) => (
-                            <tr key={u.id} className="hover:bg-slate-50/80">
-                              <td className="py-3.5 pr-4">
-                                <div className="font-bold text-slate-900">{u.fullName}</div>
-                                <div className="text-xs text-slate-500 font-mono">{u.email}</div>
-                              </td>
-                              <td className="py-3.5 px-3">
-                                <select
-                                  value={u.role}
-                                  onChange={(e) =>
-                                    handleChangeUserRole(u.id, e.target.value as UserRole)
-                                  }
-                                  className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900"
-                                >
-                                  <option value={UserRole.ADMIN}>ADMIN</option>
-                                  <option value={UserRole.TEACHER}>TEACHER</option>
-                                  <option value={UserRole.STUDENT}>STUDENT</option>
-                                </select>
-                              </td>
-                              <td className="py-3.5 px-3">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleUserStatus(u.id)}
-                                  className={`font-bold text-xs cursor-pointer underline underline-offset-4 ${
-                                    u.status === 'Active' ? 'text-emerald-700' : 'text-rose-600'
-                                  }`}
-                                >
-                                  {u.status === 'Active' ? '● Active' : '▲ Suspended'}
-                                </button>
-                              </td>
-                              <td className="py-3.5 px-3 text-right font-mono text-xs">
-                                ⭐ {u.starsEarned} ({u.quizzesCompleted} runs)
-                              </td>
-                              <td className="py-3.5 pl-3 text-right">
-                                {currentUser?.id !== u.id ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeleteUser(u.id)}
-                                    className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
-                                  >
-                                    <Trash2 className="w-4 h-4 inline" />
-                                  </button>
-                                ) : (
-                                  <span className="text-xs text-slate-400">You</span>
-                                )}
-                              </td>
-                            </tr>
-                          ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="lg:col-span-4 space-y-6">
-                  <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
-                    <h3 className="text-base font-bold text-slate-900 mb-1">
-                      បន្ថែមអ្នកប្រើប្រាស់ថ្មី (Create User)
-                    </h3>
-                    <form onSubmit={handleCreateUserByAdmin} className="space-y-3 mt-3">
-                      <input
-                        type="text"
-                        value={newAdminUserName}
-                        onChange={(e) => setNewAdminUserName(e.target.value)}
-                        placeholder="Full Name (e.g. Nary Kim)"
-                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                        required
-                      />
-                      <input
-                        type="email"
-                        value={newAdminUserEmail}
-                        onChange={(e) => setNewAdminUserEmail(e.target.value)}
-                        placeholder="Email (e.g. nary@school.edu.kh)"
-                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs"
-                        required
-                      />
-                      <select
-                        value={newAdminUserRole}
-                        onChange={(e) => setNewAdminUserRole(e.target.value as UserRole)}
-                        className="w-full rounded-xl border border-slate-300 px-3 py-2 text-xs font-bold bg-white"
-                      >
-                        <option value={UserRole.STUDENT}>Role: STUDENT</option>
-                        <option value={UserRole.TEACHER}>Role: TEACHER</option>
-                        <option value={UserRole.ADMIN}>Role: ADMIN</option>
-                      </select>
-                      <button
-                        type="submit"
-                        className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs cursor-pointer"
-                      >
-                        + បង្កើតគណនី (Add User)
-                      </button>
-                    </form>
-                  </div>
-
-                  <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm">
-                    <h3 className="text-base font-bold text-slate-900 mb-3">
-                      កំណត់ហេតុសុវត្ថិភាព (RBAC Security Audit Log)
-                    </h3>
-                    <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1 text-xs font-mono">
-                      {auditLogs.map((log) => (
-                        <div
-                          key={log.id}
-                          className="p-2.5 rounded-xl border border-slate-200 bg-slate-50/70"
-                        >
-                          <div className="flex items-center justify-between text-slate-500">
-                            <span>{log.timestamp} · {log.actorRole}</span>
-                            <span
-                              className={
-                                log.outcome === 'ALLOWED'
-                                  ? 'text-emerald-700 font-bold'
-                                  : 'text-rose-600 font-bold'
-                              }
-                            >
-                              {log.outcome}
-                            </span>
-                          </div>
-                          <div className="text-slate-800 font-sans font-semibold mt-0.5">
-                            {log.action}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-        {/* ===================================================================
-            ROUTE 4: TEACHER / EDITOR STUDIO (/teacher — TEACHER & ADMIN)
-            =================================================================== */}
-        {currentRoute === '/teacher' &&
-          renderProtectedRoute(
-            '/teacher',
-            <div className="space-y-8">
-              <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
-                  <div>
-                    <p className="text-xs font-mono font-bold text-amber-700">
-                      PROTECTED ROUTE: /teacher · ALLOWED ROLES: TEACHER, ADMIN
-                    </p>
-                    <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 mt-1">
-                      ផ្ទាំងគ្រប់គ្រងមេរៀន និងសំណួរ (Teacher / Editor Content Studio)
-                    </h1>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedLessonId(null);
-                      navigateToRoute('/student');
-                    }}
-                    className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold whitespace-nowrap cursor-pointer self-start"
-                  >
-                    សាកល្បងជ្រើសរើសមេរៀនសិស្ស (/student) &rarr;
-                  </button>
-                </div>
-
-                {/* Add Quiz Question Tagged by `lessonId` */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-6">
-                  <div className="lg:col-span-5">
-                    <h2 className="text-lg font-bold text-slate-900 mb-2 flex items-center gap-2">
-                      <FileEdit className="w-5 h-5 text-amber-600" />
-                      <span>បន្ថែមសំណួរថ្មីតាមមេរៀន (Add Question to Lesson)</span>
-                    </h2>
-                    <p className="text-xs text-slate-500 mb-4">
-                      Select which Lesson (`lessonId`) the question belongs to.
-                    </p>
-                    <form onSubmit={handleAddCustomQuestion} className="space-y-3.5">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          ជ្រើសរើសមេរៀន (Target Lesson ID)
-                        </label>
-                        <select
-                          value={newQLessonId}
-                          onChange={(e) => setNewQLessonId(e.target.value as LessonId)}
-                          className="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-xs sm:text-sm font-bold bg-white"
-                        >
-                          {QUIZ_LESSONS.map((l) => (
-                            <option key={l.id} value={l.id}>
-                              {l.numberLabel}: {l.titleKhmer}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="grid grid-cols-3 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            រូបតំណាង (Icon)
-                          </label>
-                          <input
-                            type="text"
-                            value={newQIcon}
-                            onChange={(e) => setNewQIcon(e.target.value)}
-                            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg text-center"
-                            required
-                          />
-                        </div>
-                        <div className="col-span-2">
-                          <label className="block text-xs font-bold text-slate-700 mb-1">
-                            ពាក្យគំរូភាសាខ្មែរ (Khmer Clue Word)
-                          </label>
-                          <input
-                            type="text"
-                            value={newQWordKhmer}
-                            onChange={(e) => setNewQWordKhmer(e.target.value)}
-                            placeholder="ឧទាហរណ៍៖ អណ្តើក"
-                            className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm font-bold"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <input
-                        type="text"
-                        value={newQWordEng}
-                        onChange={(e) => setNewQWordEng(e.target.value)}
-                        placeholder="English Meaning (e.g. Turtle)"
-                        className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm"
-                        required
-                      />
-
-                      <div className="grid grid-cols-3 gap-3">
-                        <input
-                          type="text"
-                          value={newQCorrect}
-                          onChange={(e) => setNewQCorrect(e.target.value)}
-                          placeholder="ចម្លើយត្រូវ"
-                          className="w-full rounded-xl border-2 border-emerald-400 bg-emerald-50/40 px-3 py-2 text-lg font-bold text-center"
-                          required
-                        />
-                        <input
-                          type="text"
-                          value={newQWrong1}
-                          onChange={(e) => setNewQWrong1(e.target.value)}
-                          placeholder="ខុស ១"
-                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-bold text-center"
-                          required
-                        />
-                        <input
-                          type="text"
-                          value={newQWrong2}
-                          onChange={(e) => setNewQWrong2(e.target.value)}
-                          placeholder="ខុស ២"
-                          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-lg font-bold text-center"
-                          required
-                        />
-                      </div>
-
-                      <button
-                        type="submit"
-                        className="w-full py-3 px-5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>បន្ថែមសំណួរទៅក្នុងមេរៀន (Add Question)</span>
-                      </button>
-                    </form>
-                  </div>
-
-                  <div className="lg:col-span-7">
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-lg font-bold text-slate-900">
-                        កម្រងសំណួរតាមមេរៀន ({questions.length} សំណួរ)
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={() => setQuestions(INITIAL_QUIZ_DATA)}
-                        className="text-xs font-bold text-slate-500 hover:text-slate-900 underline cursor-pointer"
-                      >
-                        កំណត់ឡើងវិញ (Restore Default 16)
-                      </button>
-                    </div>
-                    <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                      {questions.map((q, idx) => (
-                        <div
-                          key={q.id}
-                          className="flex items-center justify-between gap-4 p-3 rounded-2xl border border-slate-200 bg-slate-50/60"
-                        >
-                          <div className="flex items-center gap-3">
-                            <span className="text-2xl">{q.icon}</span>
-                            <div>
-                              <p className="text-xs font-bold text-amber-700">{q.categoryLabel}</p>
-                              <p className="font-bold text-slate-900 text-sm">
-                                {idx + 1}. «{q.correctLetter}» — {q.clueWordKhmer} ({q.clueWordEnglish})
-                              </p>
-                            </div>
-                          </div>
-                          {questions.length > 4 && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setQuestions((prev) => prev.filter((item) => item.id !== q.id))
-                              }
-                              className="p-1.5 text-slate-400 hover:text-rose-600 cursor-pointer"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-        {/* ===================================================================
-            ROUTE 5: MOBILE INSTALLATION HUB (/mobile-install)
+            ROUTE 2: MOBILE INSTALLATION HUB (/mobile-install)
             =================================================================== */}
         {currentRoute === '/mobile-install' && (
           <div className="space-y-8">
@@ -3267,7 +1715,7 @@ export default function App() {
       <footer className="w-full border-t border-amber-200/70 bg-white/70 py-4 px-4 sm:px-8 text-xs text-slate-500">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>កម្មវិធីសិក្សាភាសាខ្មែរថ្នាក់ទី១ · ការជ្រើសរើសកម្រងសំណួរតាមមេរៀន (Lesson-Based Quiz Selection)</span>
-          <span>RBAC Protected Routes (/student, /teacher, /admin) · iOS &amp; Android Ready</span>
+          <span>សិស្សថ្នាក់ទី១ (Open-Access Student Mode) · iOS &amp; Android Ready</span>
         </div>
       </footer>
     </div>

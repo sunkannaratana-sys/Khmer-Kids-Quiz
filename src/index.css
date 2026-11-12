@@ -7,6 +7,14 @@
     color: #1E293B;
     overflow-x: hidden;
     -webkit-tap-highlight-color: transparent;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  button,
+  a,
+  [role='button'] {
+    touch-action: manipulation;
   }
 
   .font-khmer-title {

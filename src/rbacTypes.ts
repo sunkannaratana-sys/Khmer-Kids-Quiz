@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * Role-Based Access Control (RBAC) Types, Mock Database & Route Middleware Definitions
+ * Role-Based Access Control (RBAC) Types, Capabilities Matrix, Mock Database & Route Policies
  */
 
 export enum UserRole {
@@ -11,7 +11,31 @@ export enum UserRole {
   STUDENT = 'STUDENT',
 }
 
-export type RoutePath = '/login' | '/admin' | '/teacher' | '/student' | '/mobile-install' | '/code';
+/**
+ * Lowercase role union requested for declarative RBAC props (`'admin' | 'teacher' | 'student'`)
+ * alongside enum compatibility (`UserRole`).
+ */
+export type RoleSlug = 'admin' | 'teacher' | 'student';
+export type AnyRole = UserRole | RoleSlug;
+
+export type PermissionCapability =
+  | 'quiz:play'
+  | 'stars:earn'
+  | 'profile:edit_own'
+  | 'questions:create'
+  | 'questions:delete'
+  | 'lessons:manage'
+  | 'users:manage'
+  | 'roles:assign'
+  | 'audit:view';
+
+export type RoutePath =
+  | '/login'
+  | '/admin'
+  | '/teacher'
+  | '/student'
+  | '/mobile-install'
+  | '/code';
 
 export interface UserAccount {
   id: string;
@@ -47,6 +71,24 @@ export interface AuditLogEntry {
 }
 
 /**
+ * Normalizes either `'admin' | 'teacher' | 'student'` or `UserRole` into canonical `UserRole`.
+ */
+export function normalizeRole(role: AnyRole): UserRole {
+  const upper = String(role).toUpperCase();
+  if (upper === 'ADMIN') return UserRole.ADMIN;
+  if (upper === 'TEACHER') return UserRole.TEACHER;
+  return UserRole.STUDENT;
+}
+
+/**
+ * Converts canonical `UserRole` to lowercase `'admin' | 'teacher' | 'student'`.
+ */
+export function toRoleSlug(role: AnyRole): RoleSlug {
+  const normalized = normalizeRole(role);
+  return normalized.toLowerCase() as RoleSlug;
+}
+
+/**
  * Default Route Mapping for Automatic Post-Login Redirection
  */
 export const ROLE_DEFAULT_ROUTE: Record<UserRole, RoutePath> = {
@@ -65,6 +107,59 @@ export const ROUTE_PERMISSIONS: Record<Exclude<RoutePath, '/login'>, UserRole[]>
   '/student': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
   '/mobile-install': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
   '/code': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
+};
+
+/**
+ * Fine-Grained Role Capability Matrix for Conditional UI Rendering
+ */
+export const ROLE_CAPABILITIES: Record<UserRole, PermissionCapability[]> = {
+  [UserRole.STUDENT]: ['quiz:play', 'stars:earn', 'profile:edit_own'],
+  [UserRole.TEACHER]: [
+    'quiz:play',
+    'stars:earn',
+    'profile:edit_own',
+    'questions:create',
+    'questions:delete',
+    'lessons:manage',
+  ],
+  [UserRole.ADMIN]: [
+    'quiz:play',
+    'stars:earn',
+    'profile:edit_own',
+    'questions:create',
+    'questions:delete',
+    'lessons:manage',
+    'users:manage',
+    'roles:assign',
+    'audit:view',
+  ],
+};
+
+/**
+ * Human-readable Khmer & English badges for each role
+ */
+export const ROLE_BADGE_META: Record<
+  UserRole,
+  { labelKhmer: string; labelEnglish: string; badgeClass: string; dotClass: string }
+> = {
+  [UserRole.STUDENT]: {
+    labelKhmer: 'សិស្ស (Student)',
+    labelEnglish: 'student',
+    badgeClass: 'bg-emerald-100 text-emerald-900 border-emerald-300',
+    dotClass: 'bg-emerald-500',
+  },
+  [UserRole.TEACHER]: {
+    labelKhmer: 'គ្រូបង្រៀន (Teacher)',
+    labelEnglish: 'teacher',
+    badgeClass: 'bg-amber-100 text-amber-900 border-amber-300',
+    dotClass: 'bg-amber-500',
+  },
+  [UserRole.ADMIN]: {
+    labelKhmer: 'អ្នកគ្រប់គ្រង (Admin)',
+    labelEnglish: 'admin',
+    badgeClass: 'bg-indigo-100 text-indigo-900 border-indigo-300',
+    dotClass: 'bg-indigo-600',
+  },
 };
 
 /**

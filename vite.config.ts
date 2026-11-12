@@ -11,17 +11,27 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
+        includeAssets: [
+          'icon.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+        ],
         manifest: {
           id: '/',
           name: 'រៀនអក្សរខ្មែរថ្នាក់ទី១ — Grade 1 Khmer Quiz',
           short_name: 'KhmerQuiz',
-          description: 'Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children.',
+          description:
+            'Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children.',
+          lang: 'km',
+          dir: 'ltr',
+          categories: ['education', 'kids', 'games'],
           theme_color: '#F59E0B',
           background_color: '#FFFDF7',
           display: 'standalone',
-          orientation: 'portrait',
-          start_url: '/',
+          orientation: 'any',
+          start_url: '/student',
           scope: '/',
           icons: [
             {
@@ -46,6 +56,11 @@ export default defineConfig(() => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
+          cleanupOutdatedCaches: true,
+          clientsClaim: true,
+          skipWaiting: true,
+          navigateFallback: '/index.html',
+          navigateFallbackDenylist: [/^\/api\//],
           runtimeCaching: [
             {
               urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
