@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="km">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <script>
+      (function () {
+        var currentFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : undefined;
+        function ensureWritableFetch(target) {
+          if (!target) return;
+          try {
+            var desc = Object.getOwnPropertyDescriptor(target, 'fetch');
+            if (desc && desc.get && !desc.set && desc.configurable !== false) {
+              var getter = desc.get;
+              Object.defineProperty(target, 'fetch', {
+                configurable: true,
+                enumerable: true,
+                get: function () {
+                  return currentFetch || getter.call(this);
+                },
+                set: function (fn) {
+                  if (typeof fn === 'function') {
+                    currentFetch = fn;
+                  }
+                },
+              });
+            } else if (!desc || (desc.configurable !== false && desc.writable === false)) {
+              Object.defineProperty(target, 'fetch', {
+                configurable: true,
+                enumerable: true,
+                get: function () {
+                  return currentFetch;
+                },
+                set: function (fn) {
+                  if (typeof fn === 'function') {
+                    currentFetch = fn;
+                  }
+                },
+              });
+            }
+          } catch (_) {}
+        }
+
+        function patchAllFetch() {
+          try {
+            if (typeof Window !== 'undefined' && Window.prototype) {
+              ensureWritableFetch(Window.prototype);
+            }
+            ensureWritableFetch(window);
+          } catch (_) {}
+        }
+
+        patchAllFetch();
+        Promise.resolve().then(patchAllFetch);
+        setTimeout(patchAllFetch, 0);
+        document.addEventListener('DOMContentLoaded', patchAllFetch, { once: true });
+
+        window.addEventListener(
+          'error',
+          function (event) {
+            var msg = (event && event.message) || '';
+            var file = (event && event.filename) || '';
+            var stack = (event && event.error && event.error.stack) || '';
+            if (
+              file.indexOf('chrome-extension://') === 0 ||
+              stack.indexOf('chrome-extension://') !== -1 ||
+              msg.indexOf('Cannot set property fetch of #<Window>') !== -1
+            ) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+              return true;
+            }
+          },
+          true
+        );
+
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            var reason = event && event.reason;
+            var msg = (reason && (reason.message || String(reason))) || '';
+            var stack = (reason && reason.stack) || '';
+            if (
+              stack.indexOf('chrome-extension://') !== -1 ||
+              msg.indexOf('Cannot set property fetch of #<Window>') !== -1
+            ) {
+              event.stopImmediatePropagation();
+              event.preventDefault();
+            }
+          },
+          true
+        );
+      })();
+    </script>
+    <title>រៀនអក្សរខ្មែរថ្នាក់ទី១ — Grade 1 Khmer Alphabet & Vowels Quiz</title>
+    <meta name="description" content="Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children with audio pronunciation and star rewards." />
+    <meta property="og:title" content="រៀនអក្សរខ្មែរថ្នាក់ទី១ — Grade 1 Khmer Alphabet & Vowels Quiz" />
+    <meta property="og:description" content="Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children with audio pronunciation and star rewards." />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Khmer Kids Quiz — រៀនអក្សរខ្មែរថ្នាក់ទី១" />
+    <meta property="og:image" content="/pwa-512x512.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="រៀនអក្សរខ្មែរថ្នាក់ទី១ — Grade 1 Khmer Alphabet & Vowels Quiz" />
+    <meta name="twitter:description" content="Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children with audio pronunciation and star rewards." />
+    <meta name="twitter:image" content="/pwa-512x512.png" />
+    <meta name="theme-color" content="#F59E0B" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="KhmerQuiz" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Kantumruy+Pro:ital,wght@0,400;0,600;0,700;1,400&family=Moul&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "Khmer Kids Quiz — រៀនអក្សរខ្មែរថ្នាក់ទី១",
+        "applicationCategory": "EducationalApplication",
+        "operatingSystem": "All",
+        "inLanguage": ["km", "en"],
+        "description": "Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children with audio pronunciation, lesson-based selection, and RBAC portals.",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

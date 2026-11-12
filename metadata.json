@@ -1,0 +1,6 @@
+{
+  "name": "Khmer Kids Quiz — រៀនអក្សរខ្មែរថ្នាក់ទី១",
+  "description": "Interactive Grade 1 Khmer Alphabet (ព្យញ្ជនៈ) and Vowels (ស្រៈ) multiple-choice quiz game for 6-year-old children with audio pronunciation and star rewards.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Kantumruy Pro', 'Plus Jakarta Sans', sans-serif;
+    background-color: #FFFDF7;
+    color: #1E293B;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .font-khmer-title {
+    font-family: 'Moul', 'Kantumruy Pro', serif;
+    line-height: 1.7;
+  }
+
+  .font-khmer {
+    font-family: 'Kantumruy Pro', 'Plus Jakarta Sans', sans-serif;
+    line-height: 1.65;
+  }
+}
+
+@keyframes gentle-bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes pop-scale {
+  0% {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes shake-gentle {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  50% { transform: translateX(6px); }
+  75% { transform: translateX(-4px); }
+}
+
+.animate-gentle-bounce {
+  animation: gentle-bounce 2.6s ease-in-out infinite;
+}
+
+.animate-pop {
+  animation: pop-scale 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-shake {
+  animation: shake-gentle 0.35s ease-in-out;
+}
+

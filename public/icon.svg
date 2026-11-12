@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#F59E0B" />
+  <rect x="44" y="44" width="424" height="424" rx="88" fill="#FFFDF7" />
+  <circle cx="256" cy="210" r="110" fill="#FEF3C7" stroke="#F59E0B" stroke-width="10" />
+  <text x="256" y="255" font-family="sans-serif" font-size="145" font-weight="bold" fill="#0F172A" text-anchor="middle">ក</text>
+  <rect x="96" y="352" width="320" height="68" rx="34" fill="#10B981" />
+  <text x="256" y="398" font-family="sans-serif" font-size="36" font-weight="bold" fill="#FFFFFF" text-anchor="middle">ថ្នាក់ទី១ · KHMER</text>
+</svg>
