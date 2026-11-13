@@ -1,0 +1,141 @@
+{
+  "entities": {
+    "Question": {
+      "title": "Question",
+      "description": "A Grade 1 Khmer alphabet or vowel multiple-choice quiz question",
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Khmer question text displayed to the student"
+        },
+        "options": {
+          "type": "array",
+          "description": "Array of 4 Khmer choice strings"
+        },
+        "correctIndex": {
+          "type": "number",
+          "description": "Zero-based index (0 to 3) of the correct option in options"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Lesson or category identifier (e.g. lesson-1, lesson-2, lesson-3, lesson-4)"
+        },
+        "level": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Difficulty or grade level (e.g. ថ្នាក់ទី១ / Grade 1)"
+        },
+        "icon": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Optional visual clue emoji icon"
+        },
+        "clueWordKhmer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Optional Khmer clue word"
+        },
+        "clueWordEnglish": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Optional English translation and phonetic hint"
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Optional encouraging Khmer explanation shown when solved"
+        }
+      },
+      "required": [
+        "question",
+        "options",
+        "correctIndex",
+        "category",
+        "level"
+      ]
+    },
+    "Score": {
+      "title": "Score",
+      "description": "An immutable quiz score record for the Top 10 Leaderboard",
+      "type": "object",
+      "properties": {
+        "playerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Student player display name in Khmer or English"
+        },
+        "score": {
+          "type": "number",
+          "description": "Number of correct answers achieved"
+        },
+        "total": {
+          "type": "number",
+          "description": "Total number of questions in the completed quiz"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Category or lesson name played"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the quiz finished"
+        }
+      },
+      "required": [
+        "playerName",
+        "score",
+        "total",
+        "category",
+        "createdAt"
+      ]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Trusted admin UID registry entry",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "enum": ["admin"],
+          "minLength": 5,
+          "maxLength": 5,
+          "description": "Fixed admin role marker"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when admin entry was created"
+        }
+      },
+      "required": ["role", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/questions/{questionId}": {
+      "schema": "Question",
+      "description": "Khmer Kids Quiz questions collection: public read, admin-only write"
+    },
+    "/scores/{scoreId}": {
+      "schema": "Score",
+      "description": "Student quiz scores collection: public read, create-only"
+    },
+    "/admins/{adminId}": {
+      "schema": "AdminMember",
+      "description": "Admin role registry keyed by Firebase Auth UID"
+    }
+  }
+}

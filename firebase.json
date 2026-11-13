@@ -1,4 +1,8 @@
 {
+  "firestore": {
+    "database": "ai-studio-khmerkidsquiz-393994bb-0ad1-4204-965b-84b48fe55e92",
+    "rules": "firestore.rules"
+  },
   "hosting": {
     "public": "dist",
     "ignore": [

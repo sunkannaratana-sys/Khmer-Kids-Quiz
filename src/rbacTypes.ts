@@ -34,6 +34,7 @@ export type RoutePath =
   | '/admin'
   | '/teacher'
   | '/student'
+  | '/leaderboard'
   | '/mobile-install'
   | '/code';
 
@@ -105,6 +106,7 @@ export const ROUTE_PERMISSIONS: Record<Exclude<RoutePath, '/login'>, UserRole[]>
   '/admin': [UserRole.ADMIN],
   '/teacher': [UserRole.ADMIN, UserRole.TEACHER],
   '/student': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
+  '/leaderboard': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
   '/mobile-install': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
   '/code': [UserRole.ADMIN, UserRole.TEACHER, UserRole.STUDENT],
 };

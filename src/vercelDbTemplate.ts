@@ -4,6 +4,12 @@
  *
  * Vercel Postgres / Neon / Supabase Database Templates & Configuration
  * for "Khmer Kids Quiz — រៀនអក្សរខ្មែរថ្នាក់ទី១"
+ *
+ * IMPORTANT FOR VERCEL POSTGRES QUERY RUNNER:
+ * Vercel's web Query Runner uses PostgreSQL's extended query protocol (prepared statements),
+ * which only allows ONE SQL command per execution ("cannot insert multiple commands into a prepared statement").
+ * Below we export both the individual single-statement SQL commands (`VERCEL_SQL_STEPS`)
+ * and the full schema file.
  */
 
 export interface DbStatusResponse {
@@ -12,51 +18,43 @@ export interface DbStatusResponse {
   provider: string;
   envDetected: boolean;
   tablesInitialized: boolean;
+  questionCount?: number;
   messageKhmer: string;
   messageEnglish: string;
   timestamp: string;
 }
 
-export const VERCEL_JSON_CONFIG = `{
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "version": 2,
-  "framework": "vite",
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "rewrites": [
-    {
-      "source": "/api/(.*)",
-      "destination": "/api/$1"
-    },
-    {
-      "source": "/((?!api/|assets/|manifest\\\\.webmanifest|sw\\\\.js|workbox-.*).*)",
-      "destination": "/index.html"
-    }
-  ]
-}`;
+export interface SqlStepItem {
+  stepNumber: number;
+  titleKhmer: string;
+  titleEnglish: string;
+  sql: string;
+}
 
-export const VERCEL_POSTGRES_SCHEMA_SQL = `-- ============================================================================
--- KHMER KIDS QUIZ (រៀនអក្សរខ្មែរថ្នាក់ទី១) — VERCEL POSTGRES / NEON DATABASE SCHEMA
--- 100% Pure PostgreSQL Syntax (No curly braces "{}" — safe for all SQL Editors)
--- ============================================================================
-
--- 1. USERS & RBAC TABLE (គណនីអ្នកប្រើប្រាស់ និងតួនាទី)
-CREATE TABLE IF NOT EXISTS users (
+export const VERCEL_SQL_STEPS: SqlStepItem[] = [
+  {
+    stepNumber: 1,
+    titleKhmer: 'ជំហានទី ១៖ បង្កើតតារាង users (គណនីអ្នកប្រើប្រាស់)',
+    titleEnglish: 'Step 1: Create users table',
+    sql: `CREATE TABLE IF NOT EXISTS users (
   id VARCHAR(64) PRIMARY KEY,
   full_name TEXT NOT NULL,
   email VARCHAR(255) UNIQUE NOT NULL,
-  role VARCHAR(20) NOT NULL DEFAULT 'student' CHECK (role IN ('admin', 'teacher', 'student')),
-  status VARCHAR(20) NOT NULL DEFAULT 'Active' CHECK (status IN ('Active', 'Suspended')),
+  role VARCHAR(20) NOT NULL DEFAULT 'student',
+  status VARCHAR(20) NOT NULL DEFAULT 'Active',
   stars_earned INTEGER NOT NULL DEFAULT 0,
   quizzes_completed INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 2. QUIZ QUESTIONS TABLE (កម្រងសំណួរតាមមេរៀនថ្នាក់ទី១)
-CREATE TABLE IF NOT EXISTS quiz_questions (
+)`,
+  },
+  {
+    stepNumber: 2,
+    titleKhmer: 'ជំហានទី ២៖ បង្កើតតារាង quiz_questions (កម្រងសំណួរតាមមេរៀន)',
+    titleEnglish: 'Step 2: Create quiz_questions table',
+    sql: `CREATE TABLE IF NOT EXISTS quiz_questions (
   id BIGINT PRIMARY KEY,
-  lesson_id VARCHAR(32) NOT NULL CHECK (lesson_id IN ('lesson-1', 'lesson-2', 'lesson-3', 'lesson-4')),
+  lesson_id VARCHAR(32) NOT NULL,
   category_label TEXT NOT NULL,
   icon VARCHAR(32) NOT NULL DEFAULT '⭐',
   clue_word_khmer TEXT NOT NULL,
@@ -69,10 +67,13 @@ CREATE TABLE IF NOT EXISTS quiz_questions (
   correct_letter VARCHAR(32) NOT NULL,
   explanation TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- 3. STUDENT LESSON SCORES TABLE (ពិន្ទុខ្ពស់បំផុតតាមមេរៀន)
-CREATE TABLE IF NOT EXISTS student_lesson_scores (
+)`,
+  },
+  {
+    stepNumber: 3,
+    titleKhmer: 'ជំហានទី ៣៖ បង្កើតតារាង student_lesson_scores (ពិន្ទុសិស្ស)',
+    titleEnglish: 'Step 3: Create student_lesson_scores table',
+    sql: `CREATE TABLE IF NOT EXISTS student_lesson_scores (
   id SERIAL PRIMARY KEY,
   user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   lesson_id VARCHAR(32) NOT NULL,
@@ -80,32 +81,37 @@ CREATE TABLE IF NOT EXISTS student_lesson_scores (
   attempts INTEGER NOT NULL DEFAULT 1,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, lesson_id)
-);
-
--- 4. SECURITY AUDIT LOGS TABLE (កំណត់ហេតុសុវត្ថិភាព RBAC)
-CREATE TABLE IF NOT EXISTS audit_logs (
+)`,
+  },
+  {
+    stepNumber: 4,
+    titleKhmer: 'ជំហានទី ៤៖ បង្កើតតារាង audit_logs (កំណត់ហេតុសុវត្ថិភាព)',
+    titleEnglish: 'Step 4: Create audit_logs table',
+    sql: `CREATE TABLE IF NOT EXISTS audit_logs (
   id VARCHAR(64) PRIMARY KEY,
   actor_email VARCHAR(255) NOT NULL,
   actor_role VARCHAR(20) NOT NULL,
   action TEXT NOT NULL,
-  outcome VARCHAR(20) NOT NULL CHECK (outcome IN ('ALLOWED', 'DENIED')),
+  outcome VARCHAR(20) NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ============================================================================
--- SEED DEFAULT ACCOUNTS (Admin, Teacher, Open-Access Student)
--- ============================================================================
-INSERT INTO users (id, full_name, email, role, status, stars_earned, quizzes_completed)
+)`,
+  },
+  {
+    stepNumber: 5,
+    titleKhmer: 'ជំហានទី ៥៖ បញ្ចូលគណនីគំរូ (Seed Default Users)',
+    titleEnglish: 'Step 5: Insert default users',
+    sql: `INSERT INTO users (id, full_name, email, role, status, stars_earned, quizzes_completed)
 VALUES
   ('usr-admin-01', 'Sokha Chan (System Admin)', 'admin@khmerquiz.edu.kh', 'admin', 'Active', 48, 12),
   ('usr-teacher-01', 'អ្នកគ្រូ បុប្ផា (Teacher Bopha)', 'teacher@khmerquiz.edu.kh', 'teacher', 'Active', 35, 9),
   ('usr-student-01', 'កុមារា តារា (Student Dara)', 'student@khmerquiz.edu.kh', 'student', 'Active', 18, 5)
-ON CONFLICT (id) DO NOTHING;
-
--- ============================================================================
--- SEED INITIAL GRADE 1 KHMER QUESTIONS (Using jsonb_build_array & jsonb_build_object)
--- ============================================================================
-INSERT INTO quiz_questions (
+ON CONFLICT (id) DO NOTHING`,
+  },
+  {
+    stepNumber: 6,
+    titleKhmer: 'ជំហានទី ៦៖ បញ្ចូលសំណួរអក្សរខ្មែរថ្នាក់ទី១ (Seed Khmer Questions)',
+    titleEnglish: 'Step 6: Insert Grade 1 Khmer Quiz Questions',
+    sql: `INSERT INTO quiz_questions (
   id, lesson_id, category_label, icon, clue_word_khmer, clue_word_english,
   phonetic_hint, speech_text, question_khmer, question_english,
   options, correct_letter, explanation
@@ -155,5 +161,28 @@ VALUES
     ),
     'ឥ', 'ត្រឹមត្រូវ! «ឥ» គឺស្រៈពេញតួក្នុងពាក្យ ឥសី!'
   )
-ON CONFLICT (id) DO NOTHING;
-`;
+ON CONFLICT (id) DO NOTHING`,
+  },
+];
+
+export const VERCEL_JSON_CONFIG = `{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/((?!api/|assets/|manifest\\\\.webmanifest|sw\\\\.js|workbox-.*).*)",
+      "destination": "/index.html"
+    }
+  ]
+}`;
+
+export const VERCEL_POSTGRES_SCHEMA_SQL = VERCEL_SQL_STEPS.map(
+  (s) => `-- ${s.titleKhmer} (${s.titleEnglish})\n${s.sql};`
+).join('\n\n');

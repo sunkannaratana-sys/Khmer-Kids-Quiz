@@ -4,7 +4,7 @@
  *
  * Vercel Serverless API Route (`/api/quiz-data`)
  * Connects to Vercel Postgres / Neon Serverless Postgres via HTTP SQL API
- * (`POSTGRES_URL` or `DATABASE_URL`) with automatic graceful fallback.
+ * (`POSTGRES_URL` or `DATABASE_URL`) executing strictly ONE command per prepared statement.
  */
 
 interface SqlHttpResult<T = Record<string, unknown>> {
@@ -13,8 +13,8 @@ interface SqlHttpResult<T = Record<string, unknown>> {
 }
 
 /**
- * Executes parameterized SQL over Neon / Vercel Postgres HTTP endpoint
- * without requiring native C++ bindings in serverless/edge environments.
+ * Executes a SINGLE parameterized SQL command over Neon / Vercel Postgres HTTP endpoint.
+ * Note: Neon's HTTP SQL endpoint uses prepared statements and requires 1 command per call.
  */
 export async function executeVercelPostgresSql<T = Record<string, unknown>>(
   connectionString: string,
@@ -45,7 +45,12 @@ export async function executeVercelPostgresSql<T = Record<string, unknown>>(
   };
 }
 
+/**
+ * Runs each CREATE TABLE and INSERT statement as a separate single-command prepared statement
+ * so PostgreSQL never throws "cannot insert multiple commands into a prepared statement".
+ */
 export async function ensureVercelTables(connectionString: string): Promise<void> {
+  // Command 1: Create users table
   await executeVercelPostgresSql(
     connectionString,
     `CREATE TABLE IF NOT EXISTS users (
@@ -58,9 +63,10 @@ export async function ensureVercelTables(connectionString: string): Promise<void
       quizzes_completed INTEGER NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );`
+    )`
   );
 
+  // Command 2: Create quiz_questions table
   await executeVercelPostgresSql(
     connectionString,
     `CREATE TABLE IF NOT EXISTS quiz_questions (
@@ -78,9 +84,10 @@ export async function ensureVercelTables(connectionString: string): Promise<void
       correct_letter VARCHAR(32) NOT NULL,
       explanation TEXT NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );`
+    )`
   );
 
+  // Command 3: Create student_lesson_scores table
   await executeVercelPostgresSql(
     connectionString,
     `CREATE TABLE IF NOT EXISTS student_lesson_scores (
@@ -91,7 +98,31 @@ export async function ensureVercelTables(connectionString: string): Promise<void
       attempts INTEGER NOT NULL DEFAULT 1,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       UNIQUE(user_id, lesson_id)
-    );`
+    )`
+  );
+
+  // Command 4: Create audit_logs table
+  await executeVercelPostgresSql(
+    connectionString,
+    `CREATE TABLE IF NOT EXISTS audit_logs (
+      id VARCHAR(64) PRIMARY KEY,
+      actor_email VARCHAR(255) NOT NULL,
+      actor_role VARCHAR(20) NOT NULL,
+      action TEXT NOT NULL,
+      outcome VARCHAR(20) NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`
+  );
+
+  // Command 5: Seed default users
+  await executeVercelPostgresSql(
+    connectionString,
+    `INSERT INTO users (id, full_name, email, role, status, stars_earned, quizzes_completed)
+     VALUES
+       ('usr-admin-01', 'Sokha Chan (System Admin)', 'admin@khmerquiz.edu.kh', 'admin', 'Active', 48, 12),
+       ('usr-teacher-01', 'អ្នកគ្រូ បុប្ផា (Teacher Bopha)', 'teacher@khmerquiz.edu.kh', 'teacher', 'Active', 35, 9),
+       ('usr-student-01', 'កុមារា តារា (Student Dara)', 'student@khmerquiz.edu.kh', 'student', 'Active', 18, 5)
+     ON CONFLICT (id) DO NOTHING`
   );
 }
 
@@ -131,8 +162,10 @@ export default async function handler(
           provider: 'Vercel Postgres / Neon Serverless',
           envDetected: true,
           tablesInitialized: true,
-          messageKhmer: 'បានបង្កើតតារាង Database (users, quiz_questions, student_lesson_scores) ក្នុង Vercel ដោយជោគជ័យ!',
-          messageEnglish: 'Successfully initialized PostgreSQL tables in Vercel Postgres!',
+          messageKhmer:
+            'បានបង្កើតតារាងទាំង ៤ (users, quiz_questions, student_lesson_scores, audit_logs) ម្ដងមួយៗក្នុង Vercel ដោយជោគជ័យ!',
+          messageEnglish:
+            'Successfully initialized all 4 PostgreSQL tables one command at a time in Vercel Postgres!',
           timestamp: new Date().toISOString(),
         });
       }
@@ -151,7 +184,7 @@ export default async function handler(
            DO UPDATE SET
              best_score = GREATEST(student_lesson_scores.best_score, EXCLUDED.best_score),
              attempts = student_lesson_scores.attempts + 1,
-             updated_at = NOW();`,
+             updated_at = NOW()`,
           [userId, lessonId, score]
         );
 
@@ -163,11 +196,11 @@ export default async function handler(
       }
     }
 
-    // Default GET: verify connection & return row counts
+    // Default GET: verify connection & return row counts (1 command per prepared statement)
     await ensureVercelTables(connectionString);
     const questionsResult = await executeVercelPostgresSql<{ count: string }>(
       connectionString,
-      'SELECT COUNT(*)::text AS count FROM quiz_questions;'
+      'SELECT COUNT(*)::text AS count FROM quiz_questions'
     );
 
     return res.status(200).json({

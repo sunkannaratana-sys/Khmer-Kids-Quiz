@@ -64,7 +64,9 @@
             if (
               file.indexOf('chrome-extension://') === 0 ||
               stack.indexOf('chrome-extension://') !== -1 ||
-              msg.indexOf('Cannot set property fetch of #<Window>') !== -1
+              msg.indexOf('Cannot set property fetch of #<Window>') !== -1 ||
+              msg.indexOf('WebSocket closed without opened') !== -1 ||
+              (file.indexOf('/@vite/client') !== -1 && msg.indexOf('WebSocket') !== -1)
             ) {
               event.stopImmediatePropagation();
               event.preventDefault();
@@ -82,7 +84,9 @@
             var stack = (reason && reason.stack) || '';
             if (
               stack.indexOf('chrome-extension://') !== -1 ||
-              msg.indexOf('Cannot set property fetch of #<Window>') !== -1
+              msg.indexOf('Cannot set property fetch of #<Window>') !== -1 ||
+              msg.indexOf('WebSocket closed without opened') !== -1 ||
+              (stack.indexOf('/@vite/client') !== -1 && msg.indexOf('WebSocket') !== -1)
             ) {
               event.stopImmediatePropagation();
               event.preventDefault();

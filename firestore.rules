@@ -1,0 +1,211 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // PRIMITIVE HELPERS
+    // =========================================================================
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Guarded token helpers prevent CEL "Property is undefined" runtime errors
+    // when Identity Platform / multi-account-per-email omits top-level `email` or `email_verified`.
+    function isTokenEmailNotUnverified() {
+      return !('email_verified' in request.auth.token)
+        || request.auth.token.email_verified == true;
+    }
+
+    function hasVerifiedTopLevelAdminEmail() {
+      return ('email' in request.auth.token)
+        && ('email_verified' in request.auth.token)
+        && request.auth.token.email_verified == true
+        && request.auth.token.email == 'sunkannaratana@gmail.com';
+    }
+
+    function hasVerifiedGoogleIdentityAdminEmail() {
+      return ('firebase' in request.auth.token)
+        && (request.auth.token.firebase is map)
+        && ('sign_in_provider' in request.auth.token.firebase)
+        && request.auth.token.firebase.sign_in_provider == 'google.com'
+        && isTokenEmailNotUnverified()
+        && ('identities' in request.auth.token.firebase)
+        && (request.auth.token.firebase.identities is map)
+        && ('email' in request.auth.token.firebase.identities)
+        && (request.auth.token.firebase.identities['email'] is list)
+        && ('sunkannaratana@gmail.com' in request.auth.token.firebase.identities['email']);
+    }
+
+    function isBootstrappedAdminUid() {
+      return request.auth.uid == '32WDkjf8r0UxR1kqzPNwQ1ktA7a2'
+        && isTokenEmailNotUnverified();
+    }
+
+    function isVerifiedAdminEmail() {
+      return isSignedIn() && (
+        hasVerifiedTopLevelAdminEmail() ||
+        hasVerifiedGoogleIdentityAdminEmail() ||
+        isBootstrappedAdminUid()
+      );
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        isVerifiedAdminEmail() ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    // =========================================================================
+    // VALIDATION BLUEPRINTS
+    // =========================================================================
+    function isValidQuestion(data) {
+      return data.keys().hasAll(['question', 'options', 'correctIndex', 'category', 'level'])
+        && data.keys().hasOnly([
+          'question',
+          'options',
+          'correctIndex',
+          'category',
+          'level',
+          'icon',
+          'clueWordKhmer',
+          'clueWordEnglish',
+          'explanation'
+        ])
+        && data.question is string && data.question.size() >= 1 && data.question.size() <= 500
+        && data.options is list && data.options.size() == 4
+        && data.options[0] is string && data.options[0].size() >= 1 && data.options[0].size() <= 200
+        && data.options[1] is string && data.options[1].size() >= 1 && data.options[1].size() <= 200
+        && data.options[2] is string && data.options[2].size() >= 1 && data.options[2].size() <= 200
+        && data.options[3] is string && data.options[3].size() >= 1 && data.options[3].size() <= 200
+        && (data.correctIndex is int || data.correctIndex is float)
+        && (
+          data.correctIndex == 0 ||
+          data.correctIndex == 1 ||
+          data.correctIndex == 2 ||
+          data.correctIndex == 3
+        )
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 120
+        && data.level is string && data.level.size() >= 1 && data.level.size() <= 60
+        && (!('icon' in data) || (data.icon is string && data.icon.size() >= 1 && data.icon.size() <= 32))
+        && (!('clueWordKhmer' in data) || (data.clueWordKhmer is string && data.clueWordKhmer.size() >= 1 && data.clueWordKhmer.size() <= 120))
+        && (!('clueWordEnglish' in data) || (data.clueWordEnglish is string && data.clueWordEnglish.size() >= 1 && data.clueWordEnglish.size() <= 120))
+        && (!('explanation' in data) || (data.explanation is string && data.explanation.size() >= 1 && data.explanation.size() <= 300));
+    }
+
+    function isValidScore(data) {
+      return data.keys().hasAll(['playerName', 'score', 'total', 'category', 'createdAt'])
+        && data.keys().hasOnly(['playerName', 'score', 'total', 'category', 'createdAt'])
+        && data.playerName is string && data.playerName.size() >= 1 && data.playerName.size() <= 80
+        && (data.score is int || data.score is float) && data.score >= 0 && data.score <= 1000
+        && (data.total is int || data.total is float) && data.total >= 1 && data.total <= 1000
+        && data.score <= data.total
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 120
+        && data.createdAt == request.time;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['role', 'createdAt'])
+        && data.keys().hasOnly(['role', 'createdAt'])
+        && data.role is string && data.role.size() == 5 && data.role == 'admin'
+        && data.createdAt == request.time;
+    }
+
+    // =========================================================================
+    // COLLECTION: /questions/{questionId}
+    // Everyone can read; only Admin can create, update, or delete.
+    // Evaluation Order: 1. Auth -> 2. Static Validation -> 3. Relational/Role Check
+    // =========================================================================
+    match /questions/{questionId} {
+      allow get: if isValidId(questionId);
+      allow list: if request.query.limit == null || request.query.limit <= 200;
+
+      allow create: if isSignedIn() && isValidId(questionId) && isValidQuestion(incoming()) && isAdmin();
+
+      allow update: if (
+        isSignedIn() && isValidQuestion(incoming()) && isValidId(questionId) && (
+          isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'question',
+            'options',
+            'correctIndex',
+            'category',
+            'level',
+            'icon',
+            'clueWordKhmer',
+            'clueWordEnglish',
+            'explanation'
+          ])
+        )
+      );
+
+      allow delete: if isSignedIn() && isValidId(questionId) && isAdmin();
+    }
+
+    // =========================================================================
+    // COLLECTION: /scores/{scoreId}
+    // Everyone can read; only create is allowed (strictly immutable).
+    // =========================================================================
+    match /scores/{scoreId} {
+      allow get: if isValidId(scoreId);
+      allow list: if request.query.limit == null || request.query.limit <= 100;
+
+      allow create: if isValidId(scoreId) && isValidScore(incoming());
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // COLLECTION: /admins/{adminId}
+    // Trusted admin UID lookup registry (only verified bootstrapped admin can initialize own record).
+    // =========================================================================
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && isValidId(adminId) && (
+        request.auth.uid == adminId || isVerifiedAdminEmail()
+      );
+      allow list: if false;
+      allow create: if isSignedIn()
+        && isValidId(adminId)
+        && request.auth.uid == adminId
+        && isValidAdminMember(incoming())
+        && isVerifiedAdminEmail();
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // CONNECTION & SCHEMA PROBE: /test/{docId}
+    // Read-only boot connectivity check (`getDocFromServer(doc(db, 'test', 'connection'))`)
+    // =========================================================================
+    match /test/{docId} {
+      allow get: if docId == 'connection' || (
+        docId == 'schema-self-test' && isValidQuestion({
+          'question': 'តើពាក្យ «ក្តាម» ផ្តើមដោយព្យញ្ជនៈមួយណា?',
+          'options': ['ក (Ka)', 'ខ (Kha)', 'គ (Ko)', 'ឃ (Kho)'],
+          'correctIndex': 0,
+          'category': 'lesson-1',
+          'level': 'ថ្នាក់ទី១',
+          'icon': '🦀',
+          'clueWordKhmer': 'ក្តាម',
+          'clueWordEnglish': 'Crab (Kdaam)',
+          'explanation': 'ត្រឹមត្រូវ! «ក» គឺ ក ក្តាម (Ka for Crab)!'
+        })
+      );
+      allow list, create, update, delete: if false;
+    }
+  }
+}

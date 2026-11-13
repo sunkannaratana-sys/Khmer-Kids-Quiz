@@ -40,10 +40,10 @@ async function startServer() {
   const distIndexHtml = path.join(distPath, 'index.html');
 
   if (!isProd) {
-    // Development mode: mount Vite middleware
+    // Development mode: mount Vite middleware with HMR disabled (prevents @vite/client WebSocket errors in proxy/iframe)
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -56,7 +56,7 @@ async function startServer() {
       })
     );
 
-    // SPA Catch-All Route so refreshing /student, /teacher, /admin, /login never 404s
+    // SPA Catch-All Route so refreshing /student, /leaderboard, /admin never 404s
     app.get('*', (_req, res) => {
       res.sendFile(distIndexHtml);
     });
@@ -64,7 +64,7 @@ async function startServer() {
     // Fallback if started via `node server.ts` without NODE_ENV=production
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
